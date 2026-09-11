@@ -114,6 +114,7 @@ fun MainScreen(
     val discoverState by discoverViewModel.uiState.collectAsStateWithLifecycle()
     val searchState by searchViewModel.uiState.collectAsStateWithLifecycle()
     var currentTab by remember { mutableStateOf(Tab.DISCOVER) }
+    var showNowPlaying by remember { mutableStateOf(false) }
     LaunchedEffect(currentTab) {
         AppLogger.currentScreen = "Tab.${currentTab.name}"
         viewModel.updateCurrentTab(currentTab.name)
@@ -636,6 +637,7 @@ fun MainScreen(
         MiniPlayerBar(
             bottomPadding = mainBottomContentPadding + 4.dp,
             modifier = Modifier.align(Alignment.BottomCenter),
+            onExpand = { showNowPlaying = true },
         )
 
         // 底部操作区（Bottom bar），置于前景之外，实时模糊始终正确
@@ -648,6 +650,15 @@ fun MainScreen(
             isLiquidGlassEnabled = uiState.liquidGlass,
             onTabChange = onTabClick,
         )
+
+        // 全屏播放页覆盖层（置于底栏之上）
+        androidx.compose.animation.AnimatedVisibility(
+            visible = showNowPlaying,
+            enter = androidx.compose.animation.slideInVertically { it } + androidx.compose.animation.fadeIn(),
+            exit = androidx.compose.animation.slideOutVertically { it } + androidx.compose.animation.fadeOut(),
+        ) {
+            NowPlayingScreen(onClose = { showNowPlaying = false })
+        }
     }
 
         // Dialogs live outside Scaffold, so use window dialogs instead of Scaffold-hosted overlays.

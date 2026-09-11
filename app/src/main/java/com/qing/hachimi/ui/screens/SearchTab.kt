@@ -287,7 +287,8 @@ fun SearchTab(
                                 song = song,
                                 isSelected = song.id in state.selectedIds,
                                 progress = downloadProgress[song.id],
-                                onToggle = { onToggleSelect(song.id) }
+                                onToggle = { onToggleSelect(song.id) },
+                                queue = sortedSongs
                             )
                         }
                     }
@@ -602,6 +603,7 @@ SongListItem(
                     isSelected = song.id in state.selectedIds,
                     progress = downloadProgress[song.id],
                     onToggle = { onToggleSelect(song.id) },
+                    queue = songs,
                 )
             }
         }

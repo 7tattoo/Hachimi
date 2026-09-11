@@ -637,6 +637,7 @@ private fun LikedSongsList(
                             isSelected = song.id in state.selectedIds,
                             progress = null,
                             onToggle = { onToggleSong(song.id) },
+                            queue = state.likedSongs,
                         )
                     }
                 }
@@ -1328,6 +1329,7 @@ private fun PlaylistDetailPage(
                             isSelected = song.id in state.selectedIds,
                             progress = null,
                             onToggle = { onToggleSong(song.id) },
+                            queue = state.songs,
                         )
                     }
                 }

@@ -67,8 +67,10 @@ class PlaybackService : MediaBrowserServiceCompat() {
         const val ACTION_NEXT = "com.qing.hachimi.player.action.NEXT"
         const val ACTION_PREV = "com.qing.hachimi.player.action.PREV"
         const val ACTION_STOP = "com.qing.hachimi.player.action.STOP"
+        const val ACTION_SEEK = "com.qing.hachimi.player.action.SEEK"
         const val EXTRA_QUEUE_JSON = "extra_queue_json"
         const val EXTRA_INDEX = "extra_index"
+        const val EXTRA_POSITION = "extra_position"
 
         private const val CHANNEL_ID = "hachimi_playback"
         private const val NOTIFICATION_ID = 41001
@@ -215,6 +217,20 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 }
             }
             ACTION_TOGGLE -> if (PlaybackStateHolder.isPlaying) pause() else resume()
+            ACTION_SEEK -> {
+                val pos = intent.getLongExtra(EXTRA_POSITION, -1L)
+                if (pos >= 0) {
+                    try {
+                        player?.seekTo(pos.toInt())
+                        publishPlaybackState()
+                        val line = lineTextAt(pos)
+                        publishExtras(atomicEvent = false, line = line, whole = "")
+                        mainHandler.postDelayed({ publishExtras(false, lineTextAt(positionMs()), "") }, SEEK_REFRESH_MS)
+                    } catch (e: Exception) {
+                        AppLogger.warn("seek failed: ${e.message}")
+                    }
+                }
+            }
             ACTION_NEXT -> loadSong(index + 1, true)
             ACTION_PREV -> loadSong(index - 1, true)
             ACTION_STOP -> {
@@ -269,6 +285,10 @@ class PlaybackService : MediaBrowserServiceCompat() {
         val song = queue[wrapped]
         PlaybackStateHolder.currentSong = song
         PlaybackStateHolder.queueSize = queue.size
+        PlaybackStateHolder.queue = queue
+        PlaybackStateHolder.lyrics = emptyList()
+        PlaybackStateHolder.lineIndex = -1
+        PlaybackStateHolder.positionMs = 0L
 
         // 撤销上一首歌的所有 extras 重发任务
         mainHandler.removeCallbacksAndMessages(extrasToken)
@@ -306,6 +326,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 lrcLines = lines
                 wholeLrc = buildLrcWhole()
                 currentLineIdx = -1
+                PlaybackStateHolder.lyrics = lines
                 publishMetadata()
                 if (wholeLrc.isNotBlank()) {
                     publishExtras(atomicEvent = true, line = lineTextAt(positionMs()), whole = wholeLrc)
@@ -482,6 +503,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
     }
 
     private fun tickLyric() {
+        PlaybackStateHolder.positionMs = positionMs()
         if (lrcLines.isEmpty()) return
         val pos = positionMs()
         val idx = LrcParser.lineIndexFor(lrcLines, pos, currentLineIdx)
@@ -597,6 +619,13 @@ class PlaybackService : MediaBrowserServiceCompat() {
     private fun publishPlaybackState() {
         val s = session ?: return
         val pos = positionMs()
+        PlaybackStateHolder.positionMs = pos
+        val dur = try {
+            player?.duration?.toLong() ?: 0L
+        } catch (_: Exception) {
+            0L
+        }
+        if (dur > 0) PlaybackStateHolder.durationMs = dur
         val state = if (PlaybackStateHolder.isPlaying) {
             PlaybackStateCompat.STATE_PLAYING
         } else {

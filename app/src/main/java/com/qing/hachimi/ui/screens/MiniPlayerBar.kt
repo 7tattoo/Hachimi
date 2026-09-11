@@ -1,6 +1,7 @@
 package com.qing.hachimi.ui.screens
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -43,6 +44,7 @@ import top.yukonga.miuix.kmp.theme.MiuixTheme.colorScheme
 fun MiniPlayerBar(
     bottomPadding: Dp,
     modifier: Modifier = Modifier,
+    onExpand: () -> Unit = {},
 ) {
     val song = PlaybackStateHolder.currentSong ?: return
     val playing = PlaybackStateHolder.isPlaying
@@ -53,7 +55,8 @@ fun MiniPlayerBar(
         modifier = modifier
             .fillMaxWidth()
             .padding(horizontal = 16.dp)
-            .padding(bottom = bottomPadding),
+            .padding(bottom = bottomPadding)
+            .clickable { onExpand() },
         colors = CardDefaults.defaultColors(color = colorScheme.surfaceVariant),
     ) {
         Row(

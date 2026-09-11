@@ -670,13 +670,12 @@ private fun NewSongsCategory(
         if (state.newSongs.isNotEmpty()) {
             item { SongControls(state.selectedIds.size, state.newSongs.size, onSelectAll, onDownload, state.isPreparingDownloads) }
             items(state.newSongs, key = { it.id }) { song ->
-                SongListItem(song, song.id in state.selectedIds, downloadProgress[song.id]) { onToggleSelect(song.id) }
+                SongListItem(song, song.id in state.selectedIds, downloadProgress[song.id], queue = state.newSongs) { onToggleSelect(song.id) }
             }
         } else if (state.isLoadingNewSongs) {
             item { LoadingIndicator("正在加载...") }
         } else {
-            item { EmptyMessage("暂时没有新歌") }
-        }
+            item { EmptyMessage("暂时没有新歌") }        }
     }
     VerticalScrollBar(
         adapter = rememberScrollBarAdapter(listState),
@@ -775,7 +774,7 @@ private fun FmCategory(
         if (state.fmSongs.isNotEmpty()) {
             item { SongControls(state.selectedIds.size, state.fmSongs.size, onSelectAll, onDownload, state.isPreparingDownloads) }
             items(state.fmSongs, key = { it.id }) { song ->
-                SongListItem(song, song.id in state.selectedIds, downloadProgress[song.id]) { onToggleSelect(song.id) }
+                SongListItem(song, song.id in state.selectedIds, downloadProgress[song.id], queue = state.fmSongs) { onToggleSelect(song.id) }
             }
             item {
                 Button(
@@ -1080,6 +1079,7 @@ private fun ArtistHotSongs(
                     isSelected = song.id in state.selectedIds,
                     progress = downloadProgress[song.id],
                     onToggle = { onToggleSelect(song.id) },
+                    queue = songs,
                 )
             }
         }
@@ -1398,7 +1398,7 @@ private fun DiscoverSongDetail(
                 )
             }
             items(pagedSongs, key = { it.id }) { song ->
-                SongListItem(song, song.id in state.selectedIds, downloadProgress[song.id]) { onToggleSelect(song.id) }
+                SongListItem(song, song.id in state.selectedIds, downloadProgress[song.id], queue = songs) { onToggleSelect(song.id) }
             }
         }
     }

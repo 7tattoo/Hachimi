@@ -477,7 +477,8 @@ fun SongListItem(
     song: Song,
     isSelected: Boolean,
     progress: DownloadProgress?,
-    onToggle: () -> Unit
+    onToggle: () -> Unit,
+    queue: List<Song> = emptyList(),
 ) {
     val view = LocalView.current
     val context = LocalContext.current
@@ -497,7 +498,10 @@ fun SongListItem(
                 .fillMaxWidth()
                 .clickable {
                     view.haptic(HapticLevel.Light)
-                    onToggle()
+                    // 点击歌曲行 = 播放，并把当前列表整体加入临时播放队列
+                    val list = queue.ifEmpty { listOf(song) }
+                    val idx = list.indexOfFirst { it.id == song.id }.takeIf { it >= 0 } ?: 0
+                    PlayerController.playQueue(context, list, idx)
                 }
                 .padding(10.dp),
             verticalAlignment = Alignment.CenterVertically
@@ -548,7 +552,9 @@ fun SongListItem(
             Spacer(Modifier.width(8.dp))
             IconButton(onClick = {
                 view.haptic(HapticLevel.Light)
-                PlayerController.playOne(context, song)
+                val list = queue.ifEmpty { listOf(song) }
+                val idx = list.indexOfFirst { it.id == song.id }.takeIf { it >= 0 } ?: 0
+                PlayerController.playQueue(context, list, idx)
             }) {
                 Icon(
                     imageVector = Icons.Filled.PlayArrow,
@@ -620,7 +626,9 @@ fun SimpleSongItem(
 @Composable
 fun SongRowItem(
     song: Song,
-    onClick: () -> Unit
+    onClick: () -> Unit,
+    queue: List<Song> = emptyList(),
+    index: Int = 0,
 ) {
     val view = LocalView.current
     val context = LocalContext.current
@@ -631,7 +639,13 @@ fun SongRowItem(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .clickable { onClick() }
+                .clickable {
+                    view.haptic(HapticLevel.Light)
+                    val list = queue.ifEmpty { listOf(song) }
+                    val idx = if (index in list.indices && list[index].id == song.id) index
+                    else list.indexOfFirst { it.id == song.id }.takeIf { it >= 0 } ?: 0
+                    PlayerController.playQueue(context, list, idx)
+                }
                 .padding(10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
@@ -662,7 +676,10 @@ fun SongRowItem(
             }
             IconButton(onClick = {
                 view.haptic(HapticLevel.Light)
-                PlayerController.playOne(context, song)
+                val list = queue.ifEmpty { listOf(song) }
+                val idx = if (index in list.indices && list[index].id == song.id) index
+                else list.indexOfFirst { it.id == song.id }.takeIf { it >= 0 } ?: 0
+                PlayerController.playQueue(context, list, idx)
             }) {
                 Icon(
                     imageVector = Icons.Filled.PlayArrow,
@@ -1401,7 +1418,7 @@ fun PersonalFmSection(
                     }
                     val end = minOf(songIndex + 10, songs.size)
                     for (i in songIndex until end) {
-                        SongRowItem(song = songs[i], onClick = {})
+                        SongRowItem(song = songs[i], onClick = {}, queue = songs, index = i)
                     }
                     songIndex = end
                     currentGroup++

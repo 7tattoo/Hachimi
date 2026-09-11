@@ -32,6 +32,13 @@ object PlayerController {
 
     fun previous(context: Context) = send(context, PlaybackService.ACTION_PREV)
 
+    fun seekTo(context: Context, positionMs: Long) {
+        val intent = Intent(context, PlaybackService::class.java)
+            .setAction(PlaybackService.ACTION_SEEK)
+            .putExtra(PlaybackService.EXTRA_POSITION, positionMs)
+        ContextCompat.startForegroundService(context, intent)
+    }
+
     fun stop(context: Context) = send(context, PlaybackService.ACTION_STOP)
 
     private fun send(context: Context, action: String) {
