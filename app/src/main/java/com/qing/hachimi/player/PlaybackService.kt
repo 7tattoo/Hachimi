@@ -358,7 +358,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
                     publishExtras(atomicEvent = true, line = lineTextAt(positionMs()), whole = wholeLrc)
                     scheduleAtomicReplays(wholeLrc)
                 }
-                AppLogger.debug("lyric loaded id=${song.id} lines=${lines.size} cached=${lrcCache.containsKey(song.id)}")
+                AppLogger.debug("lyric loaded id=${song.id} lines=${lines.size} cached=${lrcCache.containsKey(song.id)} lrcPreview=${wholeLrc.take(50)}")
             }
 
             // 1. 取播放地址（无损优先，失败降级标准；URL 层面就拿不到的走同歌降级重试）
@@ -629,8 +629,10 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 val min = l.timeMs / 60000L
                 val sec = (l.timeMs % 60000) / 1000
                 val ms = l.timeMs % 1000
+                // 标准 LRC 格式 [mm:ss.SSS]，分钟必须双位（参考酷我音乐 12.0.8.0）
+                // 我们之前写的是 [m:ss.SSS]，车机不认导致歌词不显示
                 append('[')
-                append(min)
+                append(String.format("%02d", min))
                 append(':')
                 append(String.format("%02d.%03d", sec, ms))
                 append(']')
@@ -707,10 +709,14 @@ class PlaybackService : MediaBrowserServiceCompat() {
 
         if (song != null && wholeLrc.isNotBlank()) {
             // ucar 协议：整段 LRC + 状态 0 = 有歌词。
-            // 文档铁律：绝不能写 LYRICS_LINE（单行模式信号）或音乐.media.extras.*
+            // 文档铁律：绝不能写 LYRICS_LINE（单行模式信号）或 music.media.extras.*
             // 车机自己按 PlaybackState 进度滚动整段 LRC
+            // 参考：酷我音乐 12.0.8.0 只写 LYRICS_WHOLE，我们用 LYRICS_STATUS=0 明确告知有歌词
             b.putString("ucar.media.metadata.LYRICS_WHOLE", wholeLrc)
             b.putLong("ucar.media.metadata.LYRICS_STATUS", 0L)
+            // 可选：显式设置车机标题，帮助歌词卡片布局
+            b.putString("ucar.media.metadata.UCAR_TITLE", song.name)
+            b.putString("ucar.media.metadata.UCAR_ARTIST", song.artists)
         }
         return b
     }
@@ -718,7 +724,10 @@ class PlaybackService : MediaBrowserServiceCompat() {
     private fun publishMetadata() {
         val s = session ?: return
         try {
-            s.setMetadata(buildMetadataBuilder().build())
+            val meta = buildMetadataBuilder().build()
+            val hasLrc = meta.getString("ucar.media.metadata.LYRICS_WHOLE") != null
+            AppLogger.debug("publishMetadata hasLyrics=$hasLrc dur=${meta.getLong(MediaMetadataCompat.METADATA_KEY_DURATION)} lrcLen=${meta.getString("ucar.media.metadata.LYRICS_WHOLE")?.length ?: 0}")
+            s.setMetadata(meta)
         } catch (e: Exception) {
             AppLogger.warn("publishMetadata failed: ${e.message}")
         }
