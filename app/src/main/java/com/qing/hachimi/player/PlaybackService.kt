@@ -120,6 +120,9 @@ class PlaybackService : MediaBrowserServiceCompat() {
     private var consecutiveFailures = 0
     private var lastStartElapsedMs = 0L
 
+    /** 当前这首歌是否已经降级重试过标准音质（每首歌只重试一次） */
+    private var standardRetried = false
+
     /** 重发调度令牌：切歌时撤销旧歌的所有待发任务 */
     private var extrasToken = Any()
 
@@ -291,6 +294,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
         lrcLines = emptyList()
         wholeLrc = ""
         coverBitmap = null
+        standardRetried = false
         PlaybackStateHolder.currentLine = ""
 
         val song = queue[wrapped]
@@ -315,9 +319,14 @@ class PlaybackService : MediaBrowserServiceCompat() {
         loadJob = serviceScope.launch {
             val repo = runCatching { GlobalContext.get().get<NeteaseRepository>() }.getOrNull()
 
-            // 1. 取播放地址（无损优先，失败降级标准）
-            val url = repo?.getSongUrl(song.id.toString(), "lossless")
+            // 1. 取播放地址（无损优先，失败降级标准；URL 层面就拿不到的走同歌降级重试）
+            var url = repo?.getSongUrl(song.id.toString(), "lossless")
                 ?.getOrElse { repo.getSongUrl(song.id.toString(), "standard").getOrNull() }
+            if (url.isNullOrBlank() && !standardRetried) {
+                standardRetried = true
+                AppLogger.warn("no url for ${song.id} at lossless, retrying standard")
+                url = repo?.getSongUrl(song.id.toString(), "standard")?.getOrNull()
+            }
             if (url.isNullOrBlank() || currentSong()?.id != song.id) {
                 AppLogger.warn("no playable url for ${song.id}")
                 onAutoAdvanceFailure("该歌曲暂无可播放音源（可能为 VIP 歌曲）")
@@ -421,11 +430,11 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 currentSong()?.let { showNotification(it, PlaybackStateHolder.currentLine) }
             }
             p.setOnCompletionListener {
-                // 播了不到 4 秒就"完成"视为异常切换，纳入熔断计数
+                // 播了不到 4 秒就"完成"视为异常切换
                 val playedMs = SystemClock.elapsedRealtime() - lastStartElapsedMs
                 if (playedMs < MIN_PLAY_MS_BEFORE_NORMAL_END) {
-                    AppLogger.warn("track ended too fast (${playedMs}ms), counting as failure")
-                    onAutoAdvanceFailure(null)
+                    AppLogger.warn("track ended too fast (${playedMs}ms)")
+                    retryWithStandardOrAdvance(null)
                 } else {
                     consecutiveFailures = 0
                     if (queue.size > 1) {
@@ -440,13 +449,39 @@ class PlaybackService : MediaBrowserServiceCompat() {
             }
             p.setOnErrorListener { _, what, extra ->
                 AppLogger.warn("MediaPlayer error what=$what extra=$extra")
-                onAutoAdvanceFailure(null)
+                retryWithStandardOrAdvance(null)
                 true
             }
             p.prepareAsync()
         } catch (e: Exception) {
             AppLogger.warn("startPlayer failed: ${e.message}")
-            onAutoAdvanceFailure(null)
+            retryWithStandardOrAdvance(null)
+        }
+    }
+
+    /**
+     * MediaPlayer 播不动（FLAC/high-res 报错、秒完成）时：
+     * 优先对【同一首歌】降级重试标准音质（MP3），而不是直接跳到下一首。
+     * 每首歌只降级一次；降级后再失败才走熔断/跳歌。
+     */
+    private fun retryWithStandardOrAdvance(message: String?) {
+        val song = currentSong()
+        if (song != null && !standardRetried) {
+            standardRetried = true
+            AppLogger.warn("retrying ${song.id} with standard quality")
+            loadJob?.cancel()
+            loadJob = serviceScope.launch {
+                val repo = runCatching { GlobalContext.get().get<NeteaseRepository>() }.getOrNull()
+                val url = repo?.getSongUrl(song.id.toString(), "standard")?.getOrNull()
+                if (url.isNullOrBlank() || currentSong()?.id != song.id) {
+                    // 标准音质也拿不到 → 走普通失败
+                    onAutoAdvanceFailure(message ?: "标准音质不可用")
+                } else {
+                    startPlayer(url, pendingPlay)
+                }
+            }
+        } else {
+            onAutoAdvanceFailure(message)
         }
     }
 
