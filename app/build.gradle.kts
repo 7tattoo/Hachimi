@@ -48,7 +48,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.qingyueyin.hachimi"
+        applicationId = "com.apple.android.music"
         minSdk = 33
         targetSdk = 33
         versionCode = gitCommitCount
@@ -141,6 +141,9 @@ dependencies {
     implementation(libs.coil.network.okhttp)
     implementation(libs.zxing.core)
     implementation(libs.androidx.security.crypto)
+
+    // MediaSessionCompat（vivo 车机 / 原子通知歌词通道）
+    implementation("androidx.media:media:1.7.0")
 
     // jaudiotagger: pure Java audio metadata read/write (MP3 ID3v2, FLAC Vorbis Comment + Picture, etc.)
     implementation("net.jthink:jaudiotagger:3.0.1")

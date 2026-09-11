@@ -632,6 +632,12 @@ fun MainScreen(
         }
         }
 
+        // 迷你播放条（与车机/原子通知歌词同一数据源）
+        MiniPlayerBar(
+            bottomPadding = mainBottomContentPadding.calculateBottomPadding() + 4.dp,
+            modifier = Modifier.align(Alignment.BottomCenter),
+        )
+
         // 底部操作区（Bottom bar），置于前景之外，实时模糊始终正确
         MainBottomBar(
             modifier = Modifier.align(Alignment.BottomCenter),

@@ -12,6 +12,9 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 
+    <!-- Media playback foreground service (vivo 车机/原子通知歌词通道) -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIAPLAYBACK" />
+
     <!-- Storage: legacy external storage runtime permission (API 32 / Android 12L).
          MANAGE_EXTERNAL_STORAGE handles scoped-storage bypass; WRITE_EXTERNAL_STORAGE
          remains necessary as fallback on devices that still grant it at runtime. -->
@@ -73,6 +76,11 @@
             android:name=".downloader.DownloadForegroundService"
             android:exported="false"
             android:foregroundServiceType="dataSync" />
+
+        <service
+            android:name=".player.PlaybackService"
+            android:exported="false"
+            android:foregroundServiceType="mediaPlayback" />
 
     </application>
 

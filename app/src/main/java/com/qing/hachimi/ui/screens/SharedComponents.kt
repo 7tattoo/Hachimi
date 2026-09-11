@@ -2,6 +2,10 @@ package com.qing.hachimi.ui.screens
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.rememberTransformableState
 import androidx.compose.foundation.gestures.transformable
@@ -21,8 +25,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.platform.LocalView
+import com.qing.hachimi.player.PlayerController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -474,6 +480,7 @@ fun SongListItem(
     onToggle: () -> Unit
 ) {
     val view = LocalView.current
+    val context = LocalContext.current
     val status = progress?.status
     val bgColor = when (status) {
         DownloadStatus.COMPLETED -> colorScheme.secondaryContainer.copy(alpha = 0.4f)
@@ -539,6 +546,17 @@ fun SongListItem(
             }
 
             Spacer(Modifier.width(8.dp))
+            IconButton(onClick = {
+                view.haptic(HapticLevel.Light)
+                PlayerController.playOne(context, song)
+            }) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = "播放",
+                    tint = colorScheme.primary,
+                )
+            }
+            Spacer(Modifier.width(4.dp))
             StatusBadge(status, progress?.progress ?: 0f)
         }
     }
@@ -604,6 +622,8 @@ fun SongRowItem(
     song: Song,
     onClick: () -> Unit
 ) {
+    val view = LocalView.current
+    val context = LocalContext.current
     Card(
         modifier = Modifier.fillMaxWidth().directionalEntrance(song.id),
         colors = CardDefaults.defaultColors(color = colorScheme.surfaceVariant)
@@ -638,6 +658,16 @@ fun SongRowItem(
                     style = MiuixTheme.textStyles.body2,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
+                )
+            }
+            IconButton(onClick = {
+                view.haptic(HapticLevel.Light)
+                PlayerController.playOne(context, song)
+            }) {
+                Icon(
+                    imageVector = Icons.Filled.PlayArrow,
+                    contentDescription = "播放",
+                    tint = colorScheme.primary,
                 )
             }
         }

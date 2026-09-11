@@ -76,6 +76,7 @@ data class LyricData(
     val version: Int = 0
 )
 
+@Serializable
 data class Song(
     val id: Long,
     val name: String,
