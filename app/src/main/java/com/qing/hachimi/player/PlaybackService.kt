@@ -35,6 +35,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
@@ -139,6 +140,9 @@ class PlaybackService : MediaBrowserServiceCompat() {
 
     /** 恢复播放时待 seek 的进度（onPrepared 消费一次后清零） */
     private var pendingSeekMs = -1L
+
+    /** 本次 loadSong 是否由用户手动点歌触发：失败时只停下提示，不自动跳歌 */
+    private var manualSelect = false
 
     /** tick 计数：每 ~1s 向 session 推一次 PlaybackState */
     private var tickCounter = 0
@@ -249,7 +253,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
                     if (sameSong) {
                         publishAll()
                     } else {
-                        loadSong(idx, true)
+                        loadSong(idx, true, manualSelect = true)
                     }
                 }
             }
@@ -327,11 +331,12 @@ class PlaybackService : MediaBrowserServiceCompat() {
 
     private fun currentSong(): Song? = queue.getOrNull(index)
 
-    private fun loadSong(newIndex: Int, autoplay: Boolean) {
+    private fun loadSong(newIndex: Int, autoplay: Boolean, manualSelect: Boolean = false) {
         if (queue.isEmpty()) return
         val wrapped = ((newIndex % queue.size) + queue.size) % queue.size
         index = wrapped
         playGen++  // 失效所有旧 player 回调（onCompletion/onError/prepared）
+        this.manualSelect = manualSelect
         AppLogger.warn("loadSong id=${queue[wrapped].id} idx=$wrapped q=${queue.size} failStreak=$consecutiveFailures gen=$playGen")
         pendingPlay = autoplay
         currentLineIdx = -1
@@ -406,13 +411,16 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 AppLogger.debug("lyric loaded id=${song.id} lines=${lines.size} cached=${lrcCache.containsKey(song.id)} lrcPreview=${wholeLrc.take(50)}")
             }
 
-            // 1. 取播放地址（无损优先，失败降级标准；URL 层面就拿不到的走同歌降级重试）
-            var url = repo?.getSongUrl(song.id.toString(), "lossless")
-                ?.getOrElse { repo.getSongUrl(song.id.toString(), "standard").getOrNull() }
+            // 1. 取播放地址。getSongUrl 内部已做 lossless→exhigh→higher→standard 全音质降级，
+            //    不再额外重复请求 standard（旧实现每次失败要打 6 个 eapiPost，连点触发反爬限流返回空 URL）。
+            var url = repo?.getSongUrl(song.id.toString(), "lossless")?.getOrNull()
+            // 连点/瞬时反爬限流可能让 URL 返回空：等一小段时间重试一次再判定
             if (url.isNullOrBlank() && !standardRetried) {
                 standardRetried = true
-                AppLogger.warn("no url for ${song.id} at lossless, retrying standard")
-                url = repo?.getSongUrl(song.id.toString(), "standard")?.getOrNull()
+                AppLogger.warn("no url for ${song.id}, retrying after short delay (anti-abuse?)")
+                delay(600)
+                if (currentSong()?.id != song.id) return@launch
+                url = repo?.getSongUrl(song.id.toString(), "lossless")?.getOrNull()
             }
             if (url.isNullOrBlank() || currentSong()?.id != song.id) {
                 AppLogger.warn("no playable url for ${song.id}")
@@ -455,6 +463,12 @@ class PlaybackService : MediaBrowserServiceCompat() {
      * 连片失败导致无限跳歌（迷你播放条歌名狂闪）。
      */
     private fun onAutoAdvanceFailure(message: String?) {
+        // 手动点歌失败时只停下提示，不自动跳歌（否则连点会 +2/+3 跳过若干首）
+        if (manualSelect) {
+            manualSelect = false
+            stopWithMessage(message)
+            return
+        }
         consecutiveFailures++
         AppLogger.warn("auto-advance failure #$consecutiveFailures")
         if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES || queue.size <= 1) {
@@ -472,6 +486,18 @@ class PlaybackService : MediaBrowserServiceCompat() {
             PlaybackStateHolder.currentLine = message.orEmpty()
             loadSong(index + 1, pendingPlay)
         }
+    }
+
+    /** 手动点歌失败：停下并提示，不跳歌。 */
+    private fun stopWithMessage(message: String?) {
+        PlaybackStateHolder.isPlaying = false
+        PlaybackStateHolder.currentLine = message ?: "该歌曲暂无可播放音源"
+        publishPlaybackState()
+        stopTick()
+        runCatching { player?.release() }
+        player = null
+        consecutiveFailures = 0
+        currentSong()?.let { showNotification(it, PlaybackStateHolder.currentLine) }
     }
 
     private fun startPlayer(url: String, autoplay: Boolean) {
