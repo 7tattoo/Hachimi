@@ -174,10 +174,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 try {
                     player?.seekTo(pos.toInt())
                     publishPlaybackState()
-                    // seek 后立即发布对应行，120ms 后再刷一次（对齐官方适配的 SeekRefreshTask）
-                    val line = lineTextAt(pos)
-                    publishExtras(atomicEvent = false, line = line, whole = "")
-                    mainHandler.postDelayed({ publishExtras(false, lineTextAt(positionMs()), "") }, SEEK_REFRESH_MS)
+                    // seek 后只更新 metadata（含 LYRICS_WHOLE），不发 extras
                 } catch (e: Exception) {
                     AppLogger.warn("seekTo failed: ${e.message}")
                 }
@@ -242,9 +239,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
                     try {
                         player?.seekTo(pos.toInt())
                         publishPlaybackState()
-                        val line = lineTextAt(pos)
-                        publishExtras(atomicEvent = false, line = line, whole = "")
-                        mainHandler.postDelayed({ publishExtras(false, lineTextAt(positionMs()), "") }, SEEK_REFRESH_MS)
+                        // seek 后只更新 metadata（含 LYRICS_WHOLE），不发 extras
                     } catch (e: Exception) {
                         AppLogger.warn("seek failed: ${e.message}")
                     }
