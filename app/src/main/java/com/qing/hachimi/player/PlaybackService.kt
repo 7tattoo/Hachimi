@@ -542,7 +542,8 @@ class PlaybackService : MediaBrowserServiceCompat() {
             pendingPlay = true
             PlaybackStateHolder.isPlaying = true
             publishPlaybackState()
-            publishExtras(atomicEvent = false, line = lineTextAt(positionMs()), whole = "")
+            // 切回播放时只更新 metadata（有歌词才带 LYRICS_WHOLE），不发 extras
+            publishMetadata()
             startTick()
             currentSong()?.let { showNotification(it, PlaybackStateHolder.currentLine) }
         } catch (e: Exception) {
@@ -559,7 +560,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
         PlaybackStateHolder.isPlaying = false
         abandonFocus()
         publishPlaybackState()
-        publishExtras(atomicEvent = false, line = lineTextAt(positionMs()), whole = "")
+        // pause 也不发 extras，避免干扰车机状态
         stopTick()
         currentSong()?.let { showNotification(it, PlaybackStateHolder.currentLine) }
     }
@@ -612,14 +613,14 @@ class PlaybackService : MediaBrowserServiceCompat() {
         if (lrcLines.isEmpty()) return
         val pos = positionMs()
         val idx = LrcParser.lineIndexFor(lrcLines, pos, currentLineIdx)
-        // 播放页高亮/滚动依赖 lineIndex，之前漏写导致永远 -1（播放页歌词不滚动=图二问题）
+        // 播放页高亮/滚动依赖 lineIndex
         PlaybackStateHolder.lineIndex = idx
         if (idx != currentLineIdx) {
             currentLineIdx = idx
             val line = lrcLines.getOrNull(idx)?.text ?: ""
             PlaybackStateHolder.currentLine = line
-            // 逐行变化只发 extras（legacy 车联键），不碰 metadata
-            publishExtras(atomicEvent = false, line = line, whole = "")
+            // 只刷新通知文案（原子通知的副标题），不碰 extras
+            // 车联投屏歌词来自 MediaMetadata.LYRICS_WHOLE，与 extras 无关
             currentSong()?.let { showNotification(it, line) }
         }
     }
@@ -645,9 +646,12 @@ class PlaybackService : MediaBrowserServiceCompat() {
     }
 
     /**
-     * MediaSession Extras 发布（onExtrasChanged 通道）。
-     * atomicEvent=true 时携带 lrc_change 整篇 LRC 事件（原子随身听与车联歌词的真正来源）；
-     * atomicEvent=false 时只更新常驻车机键（action 置空，防止旧事件被重复消费）。
+     * MediaSession Extras 发布（vivomusicmix 原子随身听通道）。
+     * 只在切歌时（atomicEvent=true）发 lrc_change 整篇 LRC 事件，
+     * 以及 1/2/4/8/15s 重发 + 25s keepalive 兜底。
+     *
+     * 切歌后每300ms tick 只更新 MediaMetadata（LYRICS_WHOLE + LYRICS_STATUS），
+     * 绝不调用 setExtras() —— 文档铁律：extras 每次推送都会把车机压回单行。
      */
     private fun publishExtras(atomicEvent: Boolean, line: String, whole: String) {
         val s = session ?: return
@@ -656,17 +660,10 @@ class PlaybackService : MediaBrowserServiceCompat() {
             b.putBoolean(EXTRA_ALLOWED, true)
             b.putString(EXTRA_LINE, line ?: "")
             b.putBoolean(EXTRA_NOTICE, true)
+            // 只有原子随身听 lrc_change 事件才写 action；车联投屏走 metadata，不走 extras
             b.putString(ATOMIC_ACTION_KEY, if (atomicEvent) ATOMIC_LRC_CHANGE else "")
             b.putString(ATOMIC_MEDIA_ID, currentSong()?.id?.toString() ?: "")
             b.putString(ATOMIC_LYRIC, if (atomicEvent) (whole ?: "") else "")
-            // get_lyric_action：车机歌词滚动通道（prev/cur/next 三行纯文本）
-            // 车联端 q9/a.I() 读这三个值驱动多行滚动，单发当前行只会停在单行
-            if (!atomicEvent && lrcLines.isNotEmpty()) {
-                val idx = currentLineIdx
-                val prevText = if (idx > 0) lrcLines[idx - 1].text else ""
-                val nextText = if (idx < lrcLines.size - 1) lrcLines[idx + 1].text else ""
-                b.putStringArray("music.media.extras.LYRIC_ARRAY", arrayOf(prevText, line ?: "", nextText))
-            }
             s.setExtras(b)
         } catch (e: Exception) {
             AppLogger.warn("publishExtras failed: ${e.message}")
@@ -714,10 +711,11 @@ class PlaybackService : MediaBrowserServiceCompat() {
         b.putLong(KEY_SUPPORT_EVENT, SUPPORT_EVENT_ALL)
 
         if (song != null && wholeLrc.isNotBlank()) {
-            // 兼容键：部分车联版本从 MediaMetadata 读整篇 LRC
+            // ucar 协议：整段 LRC + 状态 0 = 有歌词。
+            // 文档铁律：绝不能写 LYRICS_LINE（单行模式信号）或音乐.media.extras.*
+            // 车机自己按 PlaybackState 进度滚动整段 LRC
             b.putString("ucar.media.metadata.LYRICS_WHOLE", wholeLrc)
-            val line = lrcLines.getOrNull(currentLineIdx)?.text.orEmpty()
-            if (line.isNotBlank()) b.putString("ucar.media.metadata.LYRICS_LINE", line)
+            b.putLong("ucar.media.metadata.LYRICS_STATUS", 0L)
         }
         return b
     }
