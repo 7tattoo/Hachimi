@@ -4,7 +4,6 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
-import android.app.Service
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Bitmap
@@ -13,14 +12,18 @@ import android.media.AudioAttributes
 import android.media.AudioFocusRequest
 import android.media.AudioManager
 import android.media.MediaPlayer
+import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.service.media.MediaBrowserService
+import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.MediaMetadataCompat
 import android.support.v4.media.session.MediaSessionCompat
 import android.support.v4.media.session.PlaybackStateCompat
 import androidx.core.app.NotificationCompat
 import androidx.core.content.ContextCompat
+import androidx.media.MediaBrowserServiceCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 import com.qing.hachimi.MainActivity
 import com.qing.hachimi.data.model.Song
@@ -38,18 +41,25 @@ import kotlinx.serialization.json.Json
 import org.koin.core.context.GlobalContext
 
 /**
- * 流媒体播放前台服务。
+ * 流媒体播放前台服务（MediaBrowserService）。
  *
- * 核心职责：
- * 1. MediaPlayer 流媒体播放（队列 / 上一首 / 下一首 / 自动续播）
- * 2. MediaSessionCompat：向系统（vivo 智能车载 carlink / 车机 / 原子通知）发布媒体信息
- * 3. 歌词通道：把整篇 LRC + 当前行注入 MediaSession metadata 与媒体通知 extras
- *    - LYRICS_WHOLE / LYRICS / android.media.metadata.LYRICS：整篇 LRC（带时间戳）
- *    - LYRIC / lyric：当前行（每 300ms 跟踪刷新）
- *    - LYRICS_STATUS = 0
- *    - vivomusicmix.media.metadata.support_event = "31"
+ * vivo 歌词协议（依据 huang6668/apple-music-vivo-car-lyrics 对
+ * 原子随身听 6.2.5.6 / 车联 6.0.8.3 的逆向结论）：
+ *
+ * 1. Manifest 声明 action `com.vivo.musicwidgetmix.support.service`
+ *    → 原子随身听选择合作控制器，support_event 才会原样读取 metadata。
+ * 2. MediaMetadata：`vivomusicmix.media.metadata.support_event` = 31L（7 播控 | 8 歌词 | 16 进度条）。
+ * 3. MediaSession Extras（onExtrasChanged 通道）：
+ *    - 常驻：music.media.extras.LYRIC / LYRIC_IS_ALLOWED / NOTICE_CAR
+ *    - 歌词事件（切歌清空 + 整篇 LRC + 周期重发）：
+ *      vivomusicmix.meida.extra.key.action = "vivomusicmix.extra.lrc_change"
+ *      vivomusicmix.extra.key.meidia_id    = METADATA_KEY_MEDIA_ID 同值
+ *      vivomusicmix.extra.key.lyric        = 完整带时间戳 LRC
+ *      （`meida`/`meidia` 为协议真实拼写，不能改）
+ * 4. 逐行变化只更新 extras，绝不重发 MediaMetadata（重发会重置进度条）。
+ * 5. 原子/车机自行按播放位置从整篇 LRC 切行；重发调度兜底控制器晚连接。
  */
-class PlaybackService : Service() {
+class PlaybackService : MediaBrowserServiceCompat() {
 
     companion object {
         const val ACTION_PLAY_QUEUE = "com.qing.hachimi.player.action.PLAY_QUEUE"
@@ -64,9 +74,20 @@ class PlaybackService : Service() {
         private const val NOTIFICATION_ID = 41001
         private const val TICK_MS = 300L
 
-        // vivo 歌词 metadata 键（与官方 IoT 版一致）
+        // ── vivo 协议常量（拼写照抄官方逆向结果，勿改） ──
+        private const val EXTRA_LINE = "music.media.extras.LYRIC"
+        private const val EXTRA_ALLOWED = "music.media.extras.LYRIC_IS_ALLOWED"
+        private const val EXTRA_NOTICE = "music.media.extras.NOTICE_CAR"
+        private const val ATOMIC_ACTION_KEY = "vivomusicmix.meida.extra.key.action"
+        private const val ATOMIC_LRC_CHANGE = "vivomusicmix.extra.lrc_change"
+        private const val ATOMIC_MEDIA_ID = "vivomusicmix.extra.key.meidia_id"
+        private const val ATOMIC_LYRIC = "vivomusicmix.extra.key.lyric"
         private const val KEY_SUPPORT_EVENT = "vivomusicmix.media.metadata.support_event"
-        private const val SUPPORT_EVENT_VALUE = "31"
+        private const val SUPPORT_EVENT_ALL = 7L or 8L or 16L  // 播控 | 歌词 | 进度条/seek
+
+        private val ATOMIC_REPLAY_DELAYS_MS = longArrayOf(1000L, 2000L, 4000L, 8000L, 15000L)
+        private const val ATOMIC_KEEPALIVE_MS = 25000L
+        private const val SEEK_REFRESH_MS = 120L
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -84,8 +105,12 @@ class PlaybackService : Service() {
 
     private var loadJob: Job? = null
     private var lrcLines: List<LrcLine> = emptyList()
+    private var wholeLrc: String = ""
     private var currentLineIdx = -1
     private var coverBitmap: Bitmap? = null
+
+    /** 重发调度令牌：切歌时撤销旧歌的所有待发任务 */
+    private var extrasToken = Any()
 
     private val noisyReceiver = object : android.content.BroadcastReceiver() {
         override fun onReceive(context: android.content.Context?, intent: Intent?) {
@@ -129,6 +154,10 @@ class PlaybackService : Service() {
                 try {
                     player?.seekTo(pos.toInt())
                     publishPlaybackState()
+                    // seek 后立即发布对应行，120ms 后再刷一次（对齐官方适配的 SeekRefreshTask）
+                    val line = lineTextAt(pos)
+                    publishExtras(atomicEvent = false, line = line, whole = "")
+                    mainHandler.postDelayed({ publishExtras(false, lineTextAt(positionMs()), "") }, SEEK_REFRESH_MS)
                 } catch (e: Exception) {
                     AppLogger.warn("seekTo failed: ${e.message}")
                 }
@@ -144,6 +173,8 @@ class PlaybackService : Service() {
             setCallback(callback)
             isActive = true
         }
+        // MediaBrowserService 契约：同一 session token，原子随身听经此建立合作控制器
+        session?.sessionToken?.let { setSessionToken(it) }
 
         val nf = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
         nf.createNotificationChannel(
@@ -151,6 +182,19 @@ class PlaybackService : Service() {
         )
 
         registerReceiver(noisyReceiver, IntentFilter(AudioManager.ACTION_AUDIO_BECOMING_NOISY))
+    }
+
+    override fun onGetRoot(
+        clientPackageName: String,
+        clientUid: Int,
+        rootHints: Bundle?
+    ): BrowserRoot = BrowserRoot("hachimi_root", null)
+
+    override fun onLoadChildren(
+        parentId: String,
+        result: Result<MutableList<MediaBrowserCompat.MediaItem>>
+    ) {
+        result.sendResult(null)  // 不提供浏览内容，仅作为协议入口
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
@@ -198,7 +242,7 @@ class PlaybackService : Service() {
         super.onDestroy()
     }
 
-    override fun onBind(intent: Intent?): IBinder? = null
+    override fun onBind(intent: Intent?): IBinder = super.onBind(intent)
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
@@ -218,14 +262,22 @@ class PlaybackService : Service() {
         pendingPlay = autoplay
         currentLineIdx = -1
         lrcLines = emptyList()
+        wholeLrc = ""
         coverBitmap = null
         PlaybackStateHolder.currentLine = ""
 
         val song = queue[wrapped]
         PlaybackStateHolder.currentSong = song
         PlaybackStateHolder.queueSize = queue.size
+
+        // 撤销上一首歌的所有 extras 重发任务
+        mainHandler.removeCallbacksAndMessages(extrasToken)
+        extrasToken = Any()
+
         publishMetadata()
         publishPlaybackState()
+        // 切歌清空事件：lrc_change + 新曲 ID + 空 lyric（清掉原子内存里的上一首）
+        publishExtras(atomicEvent = true, line = "", whole = "")
         showNotification(song, "")
 
         loadJob?.cancel()
@@ -249,9 +301,16 @@ class PlaybackService : Service() {
                     LrcParser.parse(full?.lrc.orEmpty()),
                     LrcParser.parse(full?.tlyric.orEmpty())
                 )
-                lrcLines = if (merged.isNotEmpty()) merged else LrcParser.parse(full?.lrc.orEmpty())
+                val lines = if (merged.isNotEmpty()) merged else LrcParser.parse(full?.lrc.orEmpty())
+                if (currentSong()?.id != song.id) return@launch
+                lrcLines = lines
+                wholeLrc = buildLrcWhole()
                 currentLineIdx = -1
                 publishMetadata()
+                if (wholeLrc.isNotBlank()) {
+                    publishExtras(atomicEvent = true, line = lineTextAt(positionMs()), whole = wholeLrc)
+                    scheduleAtomicReplays(wholeLrc)
+                }
             }
 
             // 3. 封面（失败不阻塞）
@@ -357,7 +416,7 @@ class PlaybackService : Service() {
             pendingPlay = true
             PlaybackStateHolder.isPlaying = true
             publishPlaybackState()
-            publishMetadata()
+            publishExtras(atomicEvent = false, line = lineTextAt(positionMs()), whole = "")
             startTick()
             currentSong()?.let { showNotification(it, PlaybackStateHolder.currentLine) }
         } catch (e: Exception) {
@@ -374,7 +433,7 @@ class PlaybackService : Service() {
         PlaybackStateHolder.isPlaying = false
         abandonFocus()
         publishPlaybackState()
-        publishMetadata()
+        publishExtras(atomicEvent = false, line = lineTextAt(positionMs()), whole = "")
         stopTick()
         currentSong()?.let { showNotification(it, PlaybackStateHolder.currentLine) }
     }
@@ -411,24 +470,32 @@ class PlaybackService : Service() {
         mainHandler.removeCallbacks(tickRunnable)
     }
 
+    private fun positionMs(): Long = try {
+        player?.currentPosition?.toLong() ?: 0L
+    } catch (_: Exception) {
+        0L
+    }
+
+    private fun lineTextAt(posMs: Long): String {
+        val idx = LrcParser.lineIndexFor(lrcLines, posMs, currentLineIdx)
+        return if (idx >= 0) lrcLines[idx].text else ""
+    }
+
     private fun tickLyric() {
         if (lrcLines.isEmpty()) return
-        val pos = try {
-            player?.currentPosition?.toLong() ?: return
-        } catch (_: Exception) {
-            return
-        }
+        val pos = positionMs()
         val idx = LrcParser.lineIndexFor(lrcLines, pos, currentLineIdx)
         if (idx != currentLineIdx) {
             currentLineIdx = idx
             val line = lrcLines.getOrNull(idx)?.text ?: ""
             PlaybackStateHolder.currentLine = line
-            publishMetadata()
+            // 逐行变化只发 extras（legacy 车联键），不碰 metadata
+            publishExtras(atomicEvent = false, line = line, whole = "")
             currentSong()?.let { showNotification(it, line) }
         }
     }
 
-    // ───────────────────── session / notification ─────────────────────
+    // ────────────────── vivo session extras / metadata ──────────────────
 
     private fun buildLrcWhole(): String {
         if (lrcLines.isEmpty()) return ""
@@ -448,6 +515,49 @@ class PlaybackService : Service() {
         }
     }
 
+    /**
+     * MediaSession Extras 发布（onExtrasChanged 通道）。
+     * atomicEvent=true 时携带 lrc_change 整篇 LRC 事件（原子随身听与车联歌词的真正来源）；
+     * atomicEvent=false 时只更新常驻车机键（action 置空，防止旧事件被重复消费）。
+     */
+    private fun publishExtras(atomicEvent: Boolean, line: String, whole: String) {
+        val s = session ?: return
+        try {
+            val b = Bundle()
+            b.putBoolean(EXTRA_ALLOWED, true)
+            b.putString(EXTRA_LINE, line ?: "")
+            b.putBoolean(EXTRA_NOTICE, true)
+            b.putString(ATOMIC_ACTION_KEY, if (atomicEvent) ATOMIC_LRC_CHANGE else "")
+            b.putString(ATOMIC_MEDIA_ID, currentSong()?.id?.toString() ?: "")
+            b.putString(ATOMIC_LYRIC, if (atomicEvent) (whole ?: "") else "")
+            s.setExtras(b)
+        } catch (e: Exception) {
+            AppLogger.warn("publishExtras failed: ${e.message}")
+        }
+    }
+
+    /** 整篇 LRC 发布后的重发调度：兜底原子随身听/车联晚连接与重连。 */
+    private fun scheduleAtomicReplays(whole: String) {
+        val token = extrasToken
+        for (delay in ATOMIC_REPLAY_DELAYS_MS) {
+            mainHandler.postDelayed({
+                if (token === extrasToken && whole == wholeLrc && lrcLines.isNotEmpty()) {
+                    publishExtras(atomicEvent = true, line = lineTextAt(positionMs()), whole = whole)
+                }
+            }, token, delay)
+        }
+        // keepalive：25s 周期重发，覆盖车机重连；内容不变不会触发车端封面重载
+        object : Runnable {
+            override fun run() {
+                if (token !== extrasToken) return
+                if (whole == wholeLrc && lrcLines.isNotEmpty()) {
+                    publishExtras(atomicEvent = true, line = lineTextAt(positionMs()), whole = whole)
+                }
+                mainHandler.postDelayed(this, ATOMIC_KEEPALIVE_MS)
+            }
+        }.also { mainHandler.postDelayed(it, token, ATOMIC_KEEPALIVE_MS) }
+    }
+
     private fun buildMetadataBuilder(): MediaMetadataCompat.Builder {
         val song = currentSong()
         val b = MediaMetadataCompat.Builder()
@@ -463,20 +573,14 @@ class PlaybackService : Service() {
         if (dur > 0) b.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, dur)
         coverBitmap?.let { b.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it) }
 
-        if (song != null && lrcLines.isNotEmpty()) {
-            val whole = buildLrcWhole()
-            // 标准键 + vivo 车机/原子通知键（与官方 IoT 版通道一致）
-            b.putString("android.media.metadata.LYRICS", whole)
-            b.putString("LYRICS_WHOLE", whole)
-            b.putString("LYRICS", whole)
-            b.putString("lyrics", whole)
-            b.putLong("LYRICS_STATUS", 0L)
-            b.putString(KEY_SUPPORT_EVENT, SUPPORT_EVENT_VALUE)
+        // 能力位：合作控制器原样读取，必须是 long（7 播控 | 8 歌词 | 16 进度条）
+        b.putLong(KEY_SUPPORT_EVENT, SUPPORT_EVENT_ALL)
+
+        if (song != null && wholeLrc.isNotBlank()) {
+            // 兼容键：部分车联版本从 MediaMetadata 读整篇 LRC
+            b.putString("ucar.media.metadata.LYRICS_WHOLE", wholeLrc)
             val line = lrcLines.getOrNull(currentLineIdx)?.text.orEmpty()
-            if (line.isNotBlank()) {
-                b.putString("LYRIC", line)
-                b.putString("lyric", line)
-            }
+            if (line.isNotBlank()) b.putString("ucar.media.metadata.LYRICS_LINE", line)
         }
         return b
     }
@@ -492,11 +596,7 @@ class PlaybackService : Service() {
 
     private fun publishPlaybackState() {
         val s = session ?: return
-        val pos = try {
-            player?.currentPosition?.toLong() ?: 0L
-        } catch (_: Exception) {
-            0L
-        }
+        val pos = positionMs()
         val state = if (PlaybackStateHolder.isPlaying) {
             PlaybackStateCompat.STATE_PLAYING
         } else {
@@ -524,7 +624,12 @@ class PlaybackService : Service() {
     private fun publishAll() {
         publishMetadata()
         publishPlaybackState()
+        if (wholeLrc.isNotBlank()) {
+            publishExtras(atomicEvent = true, line = lineTextAt(positionMs()), whole = wholeLrc)
+        }
     }
+
+    // ───────────────────────── notification ─────────────────────────
 
     private fun contentIntent(): PendingIntent = PendingIntent.getActivity(
         this, 0,
@@ -558,10 +663,10 @@ class PlaybackService : Service() {
                     .setMediaSession(session?.sessionToken)
                     .setShowActionsInCompactView(0, 1, 2)
             )
-        // 原子通知/系统媒体面板可能从通知 extras 读取歌词
+        // 原子通知可能从通知 extras 读取当前行
         n.extras.putString("LYRIC", line)
         n.extras.putString("lyric", line)
-        n.extras.putString("LYRICS_WHOLE", buildLrcWhole())
+        n.extras.putString("LYRICS_WHOLE", wholeLrc)
         n.extras.putLong("LYRICS_STATUS", 0L)
         return n.build()
     }
@@ -576,9 +681,17 @@ class PlaybackService : Service() {
     }
 
     private fun startForegroundCompat() {
-        val song = currentSong() ?: return
         try {
-            startForeground(NOTIFICATION_ID, buildNotification(song, PlaybackStateHolder.currentLine))
+            val song = currentSong()
+            if (song != null) {
+                startForeground(NOTIFICATION_ID, buildNotification(song, PlaybackStateHolder.currentLine))
+            } else {
+                val placeholder = NotificationCompat.Builder(this, CHANNEL_ID)
+                    .setSmallIcon(android.R.drawable.ic_media_play)
+                    .setContentTitle("Hachimi")
+                    .build()
+                startForeground(NOTIFICATION_ID, placeholder)
+            }
         } catch (e: Exception) {
             AppLogger.warn("startForeground failed: ${e.message}")
         }
