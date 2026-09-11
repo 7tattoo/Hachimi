@@ -16,6 +16,7 @@ import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.SystemClock
 import android.service.media.MediaBrowserService
 import android.support.v4.media.MediaBrowserCompat
 import android.support.v4.media.MediaMetadataCompat
@@ -90,6 +91,10 @@ class PlaybackService : MediaBrowserServiceCompat() {
         private val ATOMIC_REPLAY_DELAYS_MS = longArrayOf(1000L, 2000L, 4000L, 8000L, 15000L)
         private const val ATOMIC_KEEPALIVE_MS = 25000L
         private const val SEEK_REFRESH_MS = 120L
+
+        // 自动跳歌熔断参数
+        private const val MAX_CONSECUTIVE_FAILURES = 3
+        private const val MIN_PLAY_MS_BEFORE_NORMAL_END = 4000L
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -110,6 +115,10 @@ class PlaybackService : MediaBrowserServiceCompat() {
     private var wholeLrc: String = ""
     private var currentLineIdx = -1
     private var coverBitmap: Bitmap? = null
+
+    // 自动跳歌熔断：连续失败（取不到 URL / 播放出错 / 秒切）达到上限就停止切歌
+    private var consecutiveFailures = 0
+    private var lastStartElapsedMs = 0L
 
     /** 重发调度令牌：切歌时撤销旧歌的所有待发任务 */
     private var extrasToken = Any()
@@ -209,6 +218,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 if (!q.isNullOrEmpty()) {
                     val sameSong = q.getOrNull(idx)?.id == currentSong()?.id && player != null
                     queue = q
+                    consecutiveFailures = 0  // 手动点歌重置熔断
                     if (sameSong) {
                         publishAll()
                     } else {
@@ -231,8 +241,8 @@ class PlaybackService : MediaBrowserServiceCompat() {
                     }
                 }
             }
-            ACTION_NEXT -> loadSong(index + 1, true)
-            ACTION_PREV -> loadSong(index - 1, true)
+            ACTION_NEXT -> { consecutiveFailures = 0; loadSong(index + 1, true) }
+            ACTION_PREV -> { consecutiveFailures = 0; loadSong(index - 1, true) }
             ACTION_STOP -> {
                 stopPlayback()
                 stopSelf()
@@ -309,8 +319,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 ?.getOrElse { repo.getSongUrl(song.id.toString(), "standard").getOrNull() }
             if (url.isNullOrBlank() || currentSong()?.id != song.id) {
                 AppLogger.warn("no playable url for ${song.id}")
-                PlaybackStateHolder.currentLine = "该歌曲暂无可播放音源（可能为 VIP 歌曲）"
-                if (queue.size > 1) loadSong(index + 1, pendingPlay)
+                onAutoAdvanceFailure("该歌曲暂无可播放音源（可能为 VIP 歌曲）")
                 return@launch
             }
 
@@ -362,6 +371,27 @@ class PlaybackService : MediaBrowserServiceCompat() {
         false
     }
 
+    /**
+     * 自动切换下一首失败时的统一入口：带熔断，防止歌单里 VIP/灰色歌曲
+     * 连片失败导致无限跳歌（迷你播放条歌名狂闪）。
+     */
+    private fun onAutoAdvanceFailure(message: String?) {
+        consecutiveFailures++
+        AppLogger.warn("auto-advance failure #$consecutiveFailures")
+        if (consecutiveFailures >= MAX_CONSECUTIVE_FAILURES || queue.size <= 1) {
+            // 停止自动切歌
+            PlaybackStateHolder.isPlaying = false
+            PlaybackStateHolder.currentLine = message
+                ?: "连续 ${consecutiveFailures} 首无法播放，已停止自动切歌"
+            publishPlaybackState()
+            stopTick()
+            currentSong()?.let { showNotification(it, PlaybackStateHolder.currentLine) }
+        } else {
+            PlaybackStateHolder.currentLine = message.orEmpty()
+            loadSong(index + 1, pendingPlay)
+        }
+    }
+
     private fun startPlayer(url: String, autoplay: Boolean) {
         releasePlayer()
         val p = MediaPlayer()
@@ -376,6 +406,8 @@ class PlaybackService : MediaBrowserServiceCompat() {
             p.setDataSource(url)
             p.setOnPreparedListener { mp ->
                 if (player !== mp) return@setOnPreparedListener
+                consecutiveFailures = 0
+                lastStartElapsedMs = android.os.SystemClock.elapsedRealtime()
                 if (pendingPlay) {
                     requestFocus()
                     mp.start()
@@ -388,30 +420,32 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 currentSong()?.let { showNotification(it, PlaybackStateHolder.currentLine) }
             }
             p.setOnCompletionListener {
-                if (queue.size > 1) {
-                    loadSong(index + 1, true)
+                // 播了不到 4 秒就"完成"视为异常切换，纳入熔断计数
+                val playedMs = SystemClock.elapsedRealtime() - lastStartElapsedMs
+                if (playedMs < MIN_PLAY_MS_BEFORE_NORMAL_END) {
+                    AppLogger.warn("track ended too fast (${playedMs}ms), counting as failure")
+                    onAutoAdvanceFailure(null)
                 } else {
-                    PlaybackStateHolder.isPlaying = false
-                    publishPlaybackState()
-                    stopTick()
-                    currentSong()?.let { showNotification(it, PlaybackStateHolder.currentLine) }
+                    consecutiveFailures = 0
+                    if (queue.size > 1) {
+                        loadSong(index + 1, true)
+                    } else {
+                        PlaybackStateHolder.isPlaying = false
+                        publishPlaybackState()
+                        stopTick()
+                        currentSong()?.let { showNotification(it, PlaybackStateHolder.currentLine) }
+                    }
                 }
             }
             p.setOnErrorListener { _, what, extra ->
                 AppLogger.warn("MediaPlayer error what=$what extra=$extra")
-                if (queue.size > 1) {
-                    loadSong(index + 1, pendingPlay)
-                } else {
-                    PlaybackStateHolder.isPlaying = false
-                    publishPlaybackState()
-                    stopTick()
-                }
+                onAutoAdvanceFailure(null)
                 true
             }
             p.prepareAsync()
         } catch (e: Exception) {
             AppLogger.warn("startPlayer failed: ${e.message}")
-            if (queue.size > 1) loadSong(index + 1, pendingPlay)
+            onAutoAdvanceFailure(null)
         }
     }
 
