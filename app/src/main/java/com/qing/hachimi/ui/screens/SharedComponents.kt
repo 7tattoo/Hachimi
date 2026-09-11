@@ -477,8 +477,8 @@ fun SongListItem(
     song: Song,
     isSelected: Boolean,
     progress: DownloadProgress?,
-    onToggle: () -> Unit,
     queue: List<Song> = emptyList(),
+    onToggle: () -> Unit
 ) {
     val view = LocalView.current
     val context = LocalContext.current
