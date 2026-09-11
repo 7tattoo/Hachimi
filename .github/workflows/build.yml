@@ -19,6 +19,7 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+          cache: gradle
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
@@ -27,6 +28,16 @@ jobs:
 
       - name: Accept licenses
         run: yes | sdkmanager --licenses > /dev/null 2>&1 || true
+
+      - name: Gradle cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+          restore-keys: |
+            gradle-${{ runner.os }}-
 
       - name: Build release APK
         run: sh ./gradlew :app:assembleRelease --no-daemon --stacktrace
