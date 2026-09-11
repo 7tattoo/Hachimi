@@ -242,7 +242,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
         super.onDestroy()
     }
 
-    override fun onBind(intent: Intent?): IBinder = super.onBind(intent)
+    override fun onBind(intent: Intent?): IBinder = super.onBind(intent)!!
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
