@@ -116,6 +116,12 @@ class PlaybackService : MediaBrowserServiceCompat() {
     private var currentLineIdx = -1
     private var coverBitmap: Bitmap? = null
 
+    /** 世代号：每次切歌 +1。MediaPlayer 回调捕获当时的世代号，不匹配则忽略（防旧 player 回调误触发切歌/跳歌）。 */
+    private var playGen = 0
+
+    /** 歌词内存缓存：songId -> (解析行, 整篇 LRC)。来回切歌秒回，避免重复网络请求。 */
+    private val lrcCache = HashMap<Long, Pair<List<LrcLine>, String>>()
+
     // 自动跳歌熔断：连续失败（取不到 URL / 播放出错 / 秒切）达到上限就停止切歌
     private var consecutiveFailures = 0
     private var lastStartElapsedMs = 0L
@@ -288,7 +294,8 @@ class PlaybackService : MediaBrowserServiceCompat() {
         if (queue.isEmpty()) return
         val wrapped = ((newIndex % queue.size) + queue.size) % queue.size
         index = wrapped
-        AppLogger.debug("loadSong id=${queue[wrapped].id} idx=$wrapped q=${queue.size} failStreak=$consecutiveFailures")
+        playGen++  // 失效所有旧 player 回调（onCompletion/onError/prepared）
+        AppLogger.warn("loadSong id=${queue[wrapped].id} idx=$wrapped q=${queue.size} failStreak=$consecutiveFailures gen=$playGen")
         pendingPlay = autoplay
         currentLineIdx = -1
         lrcLines = emptyList()
@@ -296,6 +303,10 @@ class PlaybackService : MediaBrowserServiceCompat() {
         coverBitmap = null
         standardRetried = false
         PlaybackStateHolder.currentLine = ""
+
+        // 立即释放旧 player：否则旧 player 的 onCompletion/onError 会在新 URL 加载期间
+        // 触发 loadSong(index+1) / retryWithStandardOrAdvance，把刚切的歌跳过去
+        releasePlayer()
 
         val song = queue[wrapped]
         PlaybackStateHolder.currentSong = song
@@ -319,6 +330,42 @@ class PlaybackService : MediaBrowserServiceCompat() {
         loadJob = serviceScope.launch {
             val repo = runCatching { GlobalContext.get().get<NeteaseRepository>() }.getOrNull()
 
+            // 0. 歌词先并行取（不阻塞 URL/播放；有缓存则秒回）
+            launch {
+                val cached = lrcCache[song.id]
+                if (cached != null) {
+                    lrcLines = cached.first
+                    wholeLrc = cached.second
+                    currentLineIdx = -1
+                    PlaybackStateHolder.lyrics = cached.first
+                    publishMetadata()
+                    if (wholeLrc.isNotBlank()) {
+                        publishExtras(atomicEvent = true, line = lineTextAt(positionMs()), whole = wholeLrc)
+                        scheduleAtomicReplays(wholeLrc)
+                        AppLogger.debug("lyric cache hit id=${song.id} lines=${cached.first.size}")
+                    }
+                    return@launch
+                }
+                val full = repo?.getLyricFull(song.id.toString())
+                val merged = LrcParser.mergeTranslation(
+                    LrcParser.parse(full?.lrc.orEmpty()),
+                    LrcParser.parse(full?.tlyric.orEmpty())
+                )
+                val lines = if (merged.isNotEmpty()) merged else LrcParser.parse(full?.lrc.orEmpty())
+                if (currentSong()?.id != song.id) return@launch
+                lrcLines = lines
+                wholeLrc = buildLrcWhole()
+                currentLineIdx = -1
+                PlaybackStateHolder.lyrics = lines
+                if (lines.isNotEmpty()) lrcCache[song.id] = lines to wholeLrc
+                publishMetadata()
+                if (wholeLrc.isNotBlank()) {
+                    publishExtras(atomicEvent = true, line = lineTextAt(positionMs()), whole = wholeLrc)
+                    scheduleAtomicReplays(wholeLrc)
+                }
+                AppLogger.debug("lyric loaded id=${song.id} lines=${lines.size} cached=${lrcCache.containsKey(song.id)}")
+            }
+
             // 1. 取播放地址（无损优先，失败降级标准；URL 层面就拿不到的走同歌降级重试）
             var url = repo?.getSongUrl(song.id.toString(), "lossless")
                 ?.getOrElse { repo.getSongUrl(song.id.toString(), "standard").getOrNull() }
@@ -331,26 +378,6 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 AppLogger.warn("no playable url for ${song.id}")
                 onAutoAdvanceFailure("该歌曲暂无可播放音源（可能为 VIP 歌曲）")
                 return@launch
-            }
-
-            // 2. 歌词（失败不阻塞播放）
-            launch {
-                val full = repo?.getLyricFull(song.id.toString())
-                val merged = LrcParser.mergeTranslation(
-                    LrcParser.parse(full?.lrc.orEmpty()),
-                    LrcParser.parse(full?.tlyric.orEmpty())
-                )
-                val lines = if (merged.isNotEmpty()) merged else LrcParser.parse(full?.lrc.orEmpty())
-                if (currentSong()?.id != song.id) return@launch
-                lrcLines = lines
-                wholeLrc = buildLrcWhole()
-                currentLineIdx = -1
-                PlaybackStateHolder.lyrics = lines
-                publishMetadata()
-                if (wholeLrc.isNotBlank()) {
-                    publishExtras(atomicEvent = true, line = lineTextAt(positionMs()), whole = wholeLrc)
-                    scheduleAtomicReplays(wholeLrc)
-                }
             }
 
             // 3. 封面（失败不阻塞）
@@ -395,6 +422,9 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 ?: "连续 ${consecutiveFailures} 首无法播放，已停止自动切歌"
             publishPlaybackState()
             stopTick()
+            // 释放错误态 player，否则 resume() 会在死 player 上 start 失败、点播放无反应
+            runCatching { player?.release() }
+            player = null
             currentSong()?.let { showNotification(it, PlaybackStateHolder.currentLine) }
         } else {
             PlaybackStateHolder.currentLine = message.orEmpty()
@@ -406,6 +436,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
         releasePlayer()
         val p = MediaPlayer()
         player = p
+        val gen = playGen  // 捕获本次切歌世代号
         try {
             p.setAudioAttributes(
                 AudioAttributes.Builder()
@@ -415,7 +446,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
             )
             p.setDataSource(url)
             p.setOnPreparedListener { mp ->
-                if (player !== mp) return@setOnPreparedListener
+                if (player !== mp || gen != playGen) return@setOnPreparedListener
                 consecutiveFailures = 0
                 lastStartElapsedMs = android.os.SystemClock.elapsedRealtime()
                 if (pendingPlay) {
@@ -430,10 +461,11 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 currentSong()?.let { showNotification(it, PlaybackStateHolder.currentLine) }
             }
             p.setOnCompletionListener {
+                if (gen != playGen) return@setOnCompletionListener
                 // 播了不到 4 秒就"完成"视为异常切换
                 val playedMs = SystemClock.elapsedRealtime() - lastStartElapsedMs
                 if (playedMs < MIN_PLAY_MS_BEFORE_NORMAL_END) {
-                    AppLogger.warn("track ended too fast (${playedMs}ms)")
+                    AppLogger.warn("track ended too fast (${playedMs}ms) gen=$gen playGen=$playGen")
                     retryWithStandardOrAdvance(null)
                 } else {
                     consecutiveFailures = 0
@@ -448,7 +480,8 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 }
             }
             p.setOnErrorListener { _, what, extra ->
-                AppLogger.warn("MediaPlayer error what=$what extra=$extra")
+                if (gen != playGen) return@setOnErrorListener true
+                AppLogger.warn("MediaPlayer error what=$what extra=$extra gen=$gen playGen=$playGen")
                 retryWithStandardOrAdvance(null)
                 true
             }
@@ -577,6 +610,8 @@ class PlaybackService : MediaBrowserServiceCompat() {
         if (lrcLines.isEmpty()) return
         val pos = positionMs()
         val idx = LrcParser.lineIndexFor(lrcLines, pos, currentLineIdx)
+        // 播放页高亮/滚动依赖 lineIndex，之前漏写导致永远 -1（播放页歌词不滚动=图二问题）
+        PlaybackStateHolder.lineIndex = idx
         if (idx != currentLineIdx) {
             currentLineIdx = idx
             val line = lrcLines.getOrNull(idx)?.text ?: ""
