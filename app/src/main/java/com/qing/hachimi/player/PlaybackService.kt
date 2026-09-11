@@ -69,6 +69,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
         const val ACTION_PREV = "com.qing.hachimi.player.action.PREV"
         const val ACTION_STOP = "com.qing.hachimi.player.action.STOP"
         const val ACTION_SEEK = "com.qing.hachimi.player.action.SEEK"
+        const val ACTION_RESTORE = "com.qing.hachimi.player.action.RESTORE"
         const val EXTRA_QUEUE_JSON = "extra_queue_json"
         const val EXTRA_INDEX = "extra_index"
         const val EXTRA_POSITION = "extra_position"
@@ -136,6 +137,15 @@ class PlaybackService : MediaBrowserServiceCompat() {
     /** 当前这首歌是否已经降级重试过标准音质（每首歌只重试一次） */
     private var standardRetried = false
 
+    /** 恢复播放时待 seek 的进度（onPrepared 消费一次后清零） */
+    private var pendingSeekMs = -1L
+
+    /** tick 计数：每 ~1s 向 session 推一次 PlaybackState */
+    private var tickCounter = 0
+
+    /** 上次落盘播放进度的时间（elapsedRealtime） */
+    private var lastStateSaveMs = 0L
+
     /** 重发调度令牌：切歌时撤销旧歌的所有待发任务 */
     private var extrasToken = Any()
 
@@ -183,8 +193,9 @@ class PlaybackService : MediaBrowserServiceCompat() {
             override fun onSeekTo(pos: Long) {
                 try {
                     player?.seekTo(pos.toInt())
+                    currentLineIdx = -1
                     publishPlaybackState()
-                    // seek 后只更新 metadata（含 LYRICS_WHOLE），不发 extras
+                    savePlaybackState()
                 } catch (e: Exception) {
                     AppLogger.warn("seekTo failed: ${e.message}")
                 }
@@ -248,8 +259,9 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 if (pos >= 0) {
                     try {
                         player?.seekTo(pos.toInt())
+                        currentLineIdx = -1  // 让 tick 重新对齐到新位置
                         publishPlaybackState()
-                        // seek 后只更新 metadata（含 LYRICS_WHOLE），不发 extras
+                        savePlaybackState()
                     } catch (e: Exception) {
                         AppLogger.warn("seek failed: ${e.message}")
                     }
@@ -257,6 +269,24 @@ class PlaybackService : MediaBrowserServiceCompat() {
             }
             ACTION_NEXT -> { consecutiveFailures = 0; loadSong(index + 1, true) }
             ACTION_PREV -> { consecutiveFailures = 0; loadSong(index - 1, true) }
+            ACTION_RESTORE -> {
+                // 冷启动时 onCreate 已 restorePlaybackState；服务存活时在此同步 UI。
+                // 仅当有歌曲时进入前台（保持与既有"有状态即前台"行为一致），
+                // 无状态时不强制前台，避免空通知。
+                if (queue.isNotEmpty()) {
+                    PlaybackStateHolder.queue = queue
+                    PlaybackStateHolder.queueSize = queue.size
+                    PlaybackStateHolder.currentSong = currentSong()
+                    publishMetadata()
+                    publishPlaybackState()
+                    if (wholeLrc.isNotBlank()) {
+                        publishExtras(atomicEvent = true, line = lineTextAt(positionMs()), whole = wholeLrc)
+                    }
+                    currentSong()?.let { showNotification(it, PlaybackStateHolder.currentLine) }
+                    startForegroundCompat()
+                }
+                return START_NOT_STICKY
+            }
             ACTION_STOP -> {
                 stopPlayback()
                 stopSelf()
@@ -287,6 +317,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
 
     override fun onTaskRemoved(rootIntent: Intent?) {
         super.onTaskRemoved(rootIntent)
+        savePlaybackState()
         if (!PlaybackStateHolder.isPlaying) {
             stopSelf()
         }
@@ -326,8 +357,8 @@ class PlaybackService : MediaBrowserServiceCompat() {
         mainHandler.removeCallbacksAndMessages(extrasToken)
         extrasToken = Any()
 
-        // 切歌时清除持久化状态（新队列）
-        clearPlaybackState()
+        // 切歌后立即持久化新队列/索引（位置取 pendingSeekMs 或 0）
+        savePlaybackState()
 
         publishMetadata()
         publishPlaybackState()
@@ -462,9 +493,16 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 lastStartElapsedMs = android.os.SystemClock.elapsedRealtime()
                 if (pendingPlay) {
                     requestFocus()
+                    if (pendingSeekMs > 0) {
+                        runCatching { mp.seekTo(pendingSeekMs.toInt()) }
+                        PlaybackStateHolder.positionMs = pendingSeekMs
+                    }
+                    pendingSeekMs = -1L
                     mp.start()
                     PlaybackStateHolder.isPlaying = true
                     startTick()
+                } else {
+                    pendingSeekMs = -1L
                 }
                 publishMetadata()
                 publishPlaybackState()
@@ -569,6 +607,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
         PlaybackStateHolder.isPlaying = false
         abandonFocus()
         publishPlaybackState()
+        savePlaybackState()
         // pause 也不发 extras，避免干扰车机状态
         stopTick()
         currentSong()?.let { showNotification(it, PlaybackStateHolder.currentLine) }
@@ -618,18 +657,40 @@ class PlaybackService : MediaBrowserServiceCompat() {
     }
 
     private fun tickLyric() {
-        PlaybackStateHolder.positionMs = positionMs()
-        if (lrcLines.isEmpty()) return
         val pos = positionMs()
+        PlaybackStateHolder.positionMs = pos
+
+        // 周期性向 MediaSession 推送 PlaybackState（约 1s 一次）。
+        // vivo 车机按 PlaybackState 进度滚动整篇 LRC 并刷新进度条；
+        // 后台自动换歌后只推一次（pos=0）会让车机进度/歌词卡死在开头。
+        tickCounter++
+        if (tickCounter % 3 == 0 && PlaybackStateHolder.isPlaying) {
+            publishPlaybackState()
+        }
+        // 每 ~5s 落盘一次进度，防止进程被系统杀死时丢失播放状态
+        val now = SystemClock.elapsedRealtime()
+        if (now - lastStateSaveMs > 5000L) {
+            lastStateSaveMs = now
+            savePlaybackState()
+        }
+
+        if (lrcLines.isEmpty()) return
         val idx = LrcParser.lineIndexFor(lrcLines, pos, currentLineIdx)
-        // 播放页高亮/滚动依赖 lineIndex
-        PlaybackStateHolder.lineIndex = idx
-        if (idx != currentLineIdx) {
-            currentLineIdx = idx
-            val line = lrcLines.getOrNull(idx)?.text ?: ""
+        // 抑制小幅回退抖动（MediaPlayer.currentPosition 偶发非单调）：
+        // 仅当真正大幅后退（seek）时才允许歌词回退，避免 app 内看到歌词"回退"
+        val finalIdx = if (idx < currentLineIdx && currentLineIdx >= 0) {
+            val curLineTime = lrcLines.getOrNull(currentLineIdx)?.timeMs ?: 0L
+            if (curLineTime - pos > 2000L) idx else currentLineIdx
+        } else {
+            idx
+        }
+        PlaybackStateHolder.lineIndex = finalIdx
+        if (finalIdx != currentLineIdx) {
+            currentLineIdx = finalIdx
+            val line = lrcLines.getOrNull(finalIdx)?.text ?: ""
             PlaybackStateHolder.currentLine = line
-            // 只刷新通知文案（原子通知的副标题），不碰 extras
-            // 车联投屏歌词来自 MediaMetadata.LYRICS_WHOLE，与 extras 无关
+            // 行变化也同步一次 PlaybackState，让车机立刻切到新行
+            if (PlaybackStateHolder.isPlaying) publishPlaybackState()
             currentSong()?.let { showNotification(it, line) }
         }
     }
@@ -742,6 +803,10 @@ class PlaybackService : MediaBrowserServiceCompat() {
             val hasLrc = meta.getString("ucar.media.metadata.LYRICS_WHOLE") != null
             AppLogger.debug("publishMetadata hasLyrics=$hasLrc dur=${meta.getLong(MediaMetadataCompat.METADATA_KEY_DURATION)} lrcLen=${meta.getString("ucar.media.metadata.LYRICS_WHOLE")?.length ?: 0}")
             s.setMetadata(meta)
+            // 每次 metadata 更新后立刻补推一次 PlaybackState：
+            // vivo 车机收到新 metadata 会把进度重置为上次 PlaybackState 位置，
+            // 若不补推，封面/歌词就绪时多次 setMetadata 会让车机进度卡在 0
+            publishPlaybackState()
         } catch (e: Exception) {
             AppLogger.warn("publishMetadata failed: ${e.message}")
         }
@@ -872,7 +937,8 @@ class PlaybackService : MediaBrowserServiceCompat() {
             val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
             prefs.putString(KEY_QUEUE, json.encodeToString(ListSerializer(Song.serializer()), queue))
             prefs.putInt(KEY_INDEX, index)
-            prefs.putLong(KEY_POSITION, positionMs())
+            val pos = if (pendingSeekMs > 0) pendingSeekMs else positionMs()
+            prefs.putLong(KEY_POSITION, pos)
             prefs.putBoolean(KEY_PLAYING, PlaybackStateHolder.isPlaying)
             prefs.apply()
             AppLogger.debug("saved playback state: queue=${queue.size} idx=$index playing=${PlaybackStateHolder.isPlaying}")
@@ -890,6 +956,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
     }
 
     private fun restorePlaybackState() {
+        if (queue.isNotEmpty()) return  // 已有内存状态（服务存活），不重复恢复
         try {
             val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
             val queueJson = prefs.getString(KEY_QUEUE, null) ?: return
@@ -911,8 +978,9 @@ class PlaybackService : MediaBrowserServiceCompat() {
 
             AppLogger.debug("restored playback state: queue=${queue.size} idx=$index pos=$savedPos playing=$wasPlaying")
 
-            // 如果之前是播放状态，重新加载歌曲（保留进度）
+            // 如果之前是播放状态，重新加载歌曲并跳到上次进度
             if (wasPlaying) {
+                pendingSeekMs = savedPos
                 loadSong(index, true)
             } else {
                 // 暂停状态：只更新 UI，不自动播放

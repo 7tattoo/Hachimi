@@ -19,6 +19,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.qing.hachimi.data.local.SettingsManager
 import com.qing.hachimi.downloader.DownloadEngine
 import android.webkit.MimeTypeMap
+import com.qing.hachimi.player.PlaybackService
 import com.qing.hachimi.ui.screens.DiscoverViewModel
 import com.qing.hachimi.ui.screens.SearchViewModel
 import com.qing.hachimi.ui.screens.MyViewModel
@@ -141,6 +142,13 @@ class MainActivity : ComponentActivity() {
         )
 
         requestPermissionsIfNeeded()
+
+        // 启动时恢复上次播放状态到 UI：冷启动时服务 onCreate 会读 prefs 恢复；
+        // 服务存活时 onStartCommand(ACTION_RESTORE) 同步 UI。用普通 startService，
+        // 无播放时不强制进入前台，避免空通知。
+        runCatching {
+            startService(Intent(this, PlaybackService::class.java).setAction(PlaybackService.ACTION_RESTORE))
+        }
 
         // Handle deep link from music.163.com
         handleDeepLink(intent)
