@@ -335,7 +335,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
 
             // 2. 歌词（失败不阻塞播放）
             launch {
-                val full = repo.getLyricFull(song.id.toString())
+                val full = repo?.getLyricFull(song.id.toString())
                 val merged = LrcParser.mergeTranslation(
                     LrcParser.parse(full?.lrc.orEmpty()),
                     LrcParser.parse(full?.tlyric.orEmpty())
