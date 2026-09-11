@@ -389,6 +389,9 @@ class PlaybackService : MediaBrowserServiceCompat() {
                         scheduleAtomicReplays(wholeLrc)
                         AppLogger.debug("lyric cache hit id=${song.id} lines=${cached.first.size}")
                     }
+                    // 自动切歌时 vivo 车机控制器不重新读 metadata → 歌词卡在第一行；
+                    // 状态跳变 PAUSED→PLAYING 强制它重新拉取（含 LYRICS_WHOLE）。
+                    if (!manualSelect) nudgeCarController()
                     return@launch
                 }
                 val full = repo?.getLyricFull(song.id.toString())
@@ -408,6 +411,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
                     publishExtras(atomicEvent = true, line = lineTextAt(positionMs()), whole = wholeLrc)
                     scheduleAtomicReplays(wholeLrc)
                 }
+                if (!manualSelect) nudgeCarController()
                 AppLogger.debug("lyric loaded id=${song.id} lines=${lines.size} cached=${lrcCache.containsKey(song.id)} lrcPreview=${wholeLrc.take(50)}")
             }
 
@@ -797,11 +801,12 @@ class PlaybackService : MediaBrowserServiceCompat() {
             .putString(MediaMetadataCompat.METADATA_KEY_ARTIST, song?.artists ?: "")
             .putString(MediaMetadataCompat.METADATA_KEY_ALBUM, song?.album ?: "")
             .putString(MediaMetadataCompat.METADATA_KEY_MEDIA_ID, song?.id?.toString() ?: "")
-        val dur = try {
+        val liveDur = try {
             player?.duration?.toLong() ?: 0L
         } catch (_: Exception) {
             0L
         }
+        val dur = if (liveDur > 0) liveDur else PlaybackStateHolder.durationMs
         if (dur > 0) b.putLong(MediaMetadataCompat.METADATA_KEY_DURATION, dur)
         coverBitmap?.let { b.putBitmap(MediaMetadataCompat.METADATA_KEY_ALBUM_ART, it) }
 
@@ -877,6 +882,38 @@ class PlaybackService : MediaBrowserServiceCompat() {
         publishPlaybackState()
         if (wholeLrc.isNotBlank()) {
             publishExtras(atomicEvent = true, line = lineTextAt(positionMs()), whole = wholeLrc)
+        }
+    }
+
+    /**
+     * vivo 车机控制器在 App 主动切歌（非用户操作）时往往不重新读取 metadata，
+     * 导致自动换歌后歌词卡在第一行。短暂推送 PAUSED→PLAYING 状态跳变，
+     * 强制控制器重新拉取 metadata（含 LYRICS_WHOLE）与 PlaybackState。
+     * 只改 session 状态，不调用 player.pause()，不影响实际播放。
+     */
+    private fun nudgeCarController() {
+        val s = session ?: return
+        val pos = positionMs()
+        val actions = PlaybackStateCompat.ACTION_PLAY or
+            PlaybackStateCompat.ACTION_PAUSE or
+            PlaybackStateCompat.ACTION_PLAY_PAUSE or
+            PlaybackStateCompat.ACTION_SKIP_TO_NEXT or
+            PlaybackStateCompat.ACTION_SKIP_TO_PREVIOUS or
+            PlaybackStateCompat.ACTION_SEEK_TO or
+            PlaybackStateCompat.ACTION_STOP
+        try {
+            s.setPlaybackState(
+                PlaybackStateCompat.Builder().setActions(actions)
+                    .setState(PlaybackStateCompat.STATE_PAUSED, pos, 0f).build()
+            )
+            s.setPlaybackState(
+                PlaybackStateCompat.Builder().setActions(actions)
+                    .setState(PlaybackStateCompat.STATE_PLAYING, pos, 1f).build()
+            )
+            publishMetadata()
+            AppLogger.debug("nudgeCarController: PAUSED→PLAYING @${pos}ms")
+        } catch (e: Exception) {
+            AppLogger.warn("nudgeCarController failed: ${e.message}")
         }
     }
 
