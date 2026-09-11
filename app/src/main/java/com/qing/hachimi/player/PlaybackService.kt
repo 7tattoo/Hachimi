@@ -285,6 +285,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
         if (queue.isEmpty()) return
         val wrapped = ((newIndex % queue.size) + queue.size) % queue.size
         index = wrapped
+        AppLogger.debug("loadSong id=${queue[wrapped].id} idx=$wrapped q=${queue.size} failStreak=$consecutiveFailures")
         pendingPlay = autoplay
         currentLineIdx = -1
         lrcLines = emptyList()
