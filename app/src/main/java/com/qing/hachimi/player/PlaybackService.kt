@@ -393,6 +393,8 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 if (bmp != null && currentSong()?.id == song.id) {
                     coverBitmap = bmp
                     publishMetadata()
+                    // 封面就绪后同步刷新通知，否则原子通知一直显示默认音乐符号
+                    refreshNotificationWithCover()
                 }
             }
 
@@ -657,6 +659,14 @@ class PlaybackService : MediaBrowserServiceCompat() {
             b.putString(ATOMIC_ACTION_KEY, if (atomicEvent) ATOMIC_LRC_CHANGE else "")
             b.putString(ATOMIC_MEDIA_ID, currentSong()?.id?.toString() ?: "")
             b.putString(ATOMIC_LYRIC, if (atomicEvent) (whole ?: "") else "")
+            // get_lyric_action：车机歌词滚动通道（prev/cur/next 三行纯文本）
+            // 车联端 q9/a.I() 读这三个值驱动多行滚动，单发当前行只会停在单行
+            if (!atomicEvent && lrcLines.isNotEmpty()) {
+                val idx = currentLineIdx
+                val prevText = if (idx > 0) lrcLines[idx - 1].text else ""
+                val nextText = if (idx < lrcLines.size - 1) lrcLines[idx + 1].text else ""
+                b.putStringArray("music.media.extras.LYRIC_ARRAY", arrayOf(prevText, line ?: "", nextText))
+            }
             s.setExtras(b)
         } catch (e: Exception) {
             AppLogger.warn("publishExtras failed: ${e.message}")
@@ -812,6 +822,11 @@ class PlaybackService : MediaBrowserServiceCompat() {
         } catch (e: Exception) {
             AppLogger.warn("showNotification failed: ${e.message}")
         }
+    }
+
+    /** 封面加载完后同步刷新通知（否则原子通知一直显示默认音乐符号）。 */
+    private fun refreshNotificationWithCover() {
+        currentSong()?.let { showNotification(it, PlaybackStateHolder.currentLine) }
     }
 
     private fun startForegroundCompat() {
