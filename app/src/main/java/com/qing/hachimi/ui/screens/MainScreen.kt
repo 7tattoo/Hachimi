@@ -634,7 +634,7 @@ fun MainScreen(
 
         // 迷你播放条（与车机/原子通知歌词同一数据源）
         MiniPlayerBar(
-            bottomPadding = mainBottomContentPadding.calculateBottomPadding() + 4.dp,
+            bottomPadding = mainBottomContentPadding + 4.dp,
             modifier = Modifier.align(Alignment.BottomCenter),
         )
 

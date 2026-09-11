@@ -55,7 +55,6 @@ fun MiniPlayerBar(
             .padding(horizontal = 16.dp)
             .padding(bottom = bottomPadding),
         colors = CardDefaults.defaultColors(color = colorScheme.surfaceVariant),
-        shape = AppShapes.medium,
     ) {
         Row(
             modifier = Modifier

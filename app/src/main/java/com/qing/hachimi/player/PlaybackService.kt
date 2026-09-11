@@ -104,7 +104,7 @@ class PlaybackService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        audioManager = getSystemService(ContextCompat.AUDIO_SERVICE) as AudioManager
+        audioManager = getSystemService(android.content.Context.AUDIO_SERVICE) as AudioManager
         focusRequest = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
             .setAudioAttributes(
                 AudioAttributes.Builder()
@@ -434,7 +434,7 @@ class PlaybackService : Service() {
         if (lrcLines.isEmpty()) return ""
         return buildString {
             for (l in lrcLines) {
-                val min = TimeUnit.MILLISECONDS.toMinutes(l.timeMs)
+                val min = l.timeMs / 60000L
                 val sec = (l.timeMs % 60000) / 1000
                 val ms = l.timeMs % 1000
                 append('[')
@@ -466,7 +466,7 @@ class PlaybackService : Service() {
         if (song != null && lrcLines.isNotEmpty()) {
             val whole = buildLrcWhole()
             // 标准键 + vivo 车机/原子通知键（与官方 IoT 版通道一致）
-            b.putString(MediaMetadataCompat.METADATA_KEY_LYRICS, whole)
+            b.putString("android.media.metadata.LYRICS", whole)
             b.putString("LYRICS_WHOLE", whole)
             b.putString("LYRICS", whole)
             b.putString("lyrics", whole)
