@@ -95,6 +95,13 @@ class PlaybackService : MediaBrowserServiceCompat() {
         // 自动跳歌熔断参数
         private const val MAX_CONSECUTIVE_FAILURES = 3
         private const val MIN_PLAY_MS_BEFORE_NORMAL_END = 4000L
+
+        // ── 状态持久化 key ──
+        private const val PREFS_NAME = "playback_state"
+        private const val KEY_QUEUE = "queue_json"
+        private const val KEY_INDEX = "index"
+        private const val KEY_POSITION = "position_ms"
+        private const val KEY_PLAYING = "is_playing"
     }
 
     private val mainHandler = Handler(Looper.getMainLooper())
@@ -164,6 +171,9 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 }
             }
             .build()
+
+        // 恢复上次的播放状态
+        restorePlaybackState()
 
         val callback = object : MediaSessionCompat.Callback() {
             override fun onPlay() = resume()
@@ -261,6 +271,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
     override fun onDestroy() {
         mainHandler.removeCallbacksAndMessages(null)
         runCatching { unregisterReceiver(noisyReceiver) }
+        savePlaybackState()  // 退出前持久化状态
         stopPlayback()
         session?.release()
         session = null
@@ -314,6 +325,9 @@ class PlaybackService : MediaBrowserServiceCompat() {
         // 撤销上一首歌的所有 extras 重发任务
         mainHandler.removeCallbacksAndMessages(extrasToken)
         extrasToken = Any()
+
+        // 切歌时清除持久化状态（新队列）
+        clearPlaybackState()
 
         publishMetadata()
         publishPlaybackState()
@@ -792,7 +806,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
     private fun buildNotification(song: Song, line: String): Notification {
         val playing = PlaybackStateHolder.isPlaying
         val text = line.ifBlank { song.artists }
-        val n = NotificationCompat.Builder(this, CHANNEL_ID)
+        val b = NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
             .setContentTitle(song.name)
             .setContentText(text)
@@ -809,12 +823,14 @@ class PlaybackService : MediaBrowserServiceCompat() {
                     .setMediaSession(session?.sessionToken)
                     .setShowActionsInCompactView(0, 1, 2)
             )
-        // 原子通知可能从通知 extras 读取当前行
-        n.extras.putString("LYRIC", line)
-        n.extras.putString("lyric", line)
-        n.extras.putString("LYRICS_WHOLE", wholeLrc)
-        n.extras.putLong("LYRICS_STATUS", 0L)
-        return n.build()
+        // 封面写入通知 extras，让原子通知卡片能显示专辑图
+        coverBitmap?.let { b.setLargeIcon(it) }
+        // 歌词 extras（原子通知可能从这里读）
+        b.extras.putString("LYRIC", line)
+        b.extras.putString("lyric", line)
+        b.extras.putString("LYRICS_WHOLE", wholeLrc)
+        b.extras.putLong("LYRICS_STATUS", 0L)
+        return b.build()
     }
 
     private fun showNotification(song: Song, line: String) {
@@ -845,6 +861,67 @@ class PlaybackService : MediaBrowserServiceCompat() {
             }
         } catch (e: Exception) {
             AppLogger.warn("startForeground failed: ${e.message}")
+        }
+    }
+
+    // ───────────────────────────── state persistence ─────────────────────────────
+
+    private fun savePlaybackState() {
+        if (queue.isEmpty()) return
+        try {
+            val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit()
+            prefs.putString(KEY_QUEUE, json.encodeToString(ListSerializer(Song.serializer()), queue))
+            prefs.putInt(KEY_INDEX, index)
+            prefs.putLong(KEY_POSITION, positionMs())
+            prefs.putBoolean(KEY_PLAYING, PlaybackStateHolder.isPlaying)
+            prefs.apply()
+            AppLogger.debug("saved playback state: queue=${queue.size} idx=$index playing=${PlaybackStateHolder.isPlaying}")
+        } catch (e: Exception) {
+            AppLogger.warn("savePlaybackState failed: ${e.message}")
+        }
+    }
+
+    private fun clearPlaybackState() {
+        try {
+            getSharedPreferences(PREFS_NAME, MODE_PRIVATE).edit().clear().apply()
+        } catch (e: Exception) {
+            AppLogger.warn("clearPlaybackState failed: ${e.message}")
+        }
+    }
+
+    private fun restorePlaybackState() {
+        try {
+            val prefs = getSharedPreferences(PREFS_NAME, MODE_PRIVATE)
+            val queueJson = prefs.getString(KEY_QUEUE, null) ?: return
+            val restoredQueue = runCatching {
+                json.decodeFromString(ListSerializer(Song.serializer()), queueJson)
+            }.getOrNull() ?: return
+            if (restoredQueue.isEmpty()) return
+
+            queue = restoredQueue
+            index = prefs.getInt(KEY_INDEX, -1).coerceIn(0, queue.size - 1)
+            val savedPos = prefs.getLong(KEY_POSITION, 0L)
+            val wasPlaying = prefs.getBoolean(KEY_PLAYING, false)
+
+            PlaybackStateHolder.queue = queue
+            PlaybackStateHolder.queueSize = queue.size
+            PlaybackStateHolder.currentSong = queue[index]
+            PlaybackStateHolder.isPlaying = wasPlaying
+            PlaybackStateHolder.positionMs = savedPos
+
+            AppLogger.debug("restored playback state: queue=${queue.size} idx=$index pos=$savedPos playing=$wasPlaying")
+
+            // 如果之前是播放状态，重新加载歌曲（保留进度）
+            if (wasPlaying) {
+                loadSong(index, true)
+            } else {
+                // 暂停状态：只更新 UI，不自动播放
+                publishMetadata()
+                publishPlaybackState()
+                currentSong()?.let { showNotification(it, PlaybackStateHolder.currentLine) }
+            }
+        } catch (e: Exception) {
+            AppLogger.warn("restorePlaybackState failed: ${e.message}")
         }
     }
 }
