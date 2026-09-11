@@ -192,8 +192,8 @@ class PlaybackService : MediaBrowserServiceCompat() {
         val callback = object : MediaSessionCompat.Callback() {
             override fun onPlay() = resume()
             override fun onPause() = pause()
-            override fun onSkipToNext() = loadSong(index + 1, true)
-            override fun onSkipToPrevious() = loadSong(index - 1, true)
+            override fun onSkipToNext() = loadSong(index + 1, true, manualSelect = true)
+            override fun onSkipToPrevious() = loadSong(index - 1, true, manualSelect = true)
             override fun onSeekTo(pos: Long) {
                 try {
                     player?.seekTo(pos.toInt())
@@ -271,8 +271,8 @@ class PlaybackService : MediaBrowserServiceCompat() {
                     }
                 }
             }
-            ACTION_NEXT -> { consecutiveFailures = 0; loadSong(index + 1, true) }
-            ACTION_PREV -> { consecutiveFailures = 0; loadSong(index - 1, true) }
+            ACTION_NEXT -> { consecutiveFailures = 0; loadSong(index + 1, true, manualSelect = true) }
+            ACTION_PREV -> { consecutiveFailures = 0; loadSong(index - 1, true, manualSelect = true) }
             ACTION_RESTORE -> {
                 // 冷启动时 onCreate 已 restorePlaybackState；服务存活时在此同步 UI。
                 // 仅当有歌曲时进入前台（保持与既有"有状态即前台"行为一致），
