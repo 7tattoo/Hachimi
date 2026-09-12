@@ -1,6 +1,7 @@
 package com.qing.hachimi.ui.screens
 
 import androidx.activity.compose.BackHandler
+import android.content.res.Configuration
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -9,6 +10,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -44,6 +46,7 @@ import androidx.compose.ui.draw.blur
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -71,6 +74,12 @@ private fun formatTime(ms: Long): String {
 @Composable
 fun NowPlayingScreen(onClose: () -> Unit) {
     val song = PlaybackStateHolder.currentSong ?: return
+    val configuration = LocalConfiguration.current
+    // 横屏（vivo 车联投屏）自动用车载布局
+    if (configuration.orientation == Configuration.ORIENTATION_LANDSCAPE) {
+        NowPlayingScreenLandscape(onClose)
+        return
+    }
     val playing = PlaybackStateHolder.isPlaying
     val lyrics = PlaybackStateHolder.lyrics
     val lineIndex = PlaybackStateHolder.lineIndex
@@ -278,6 +287,201 @@ fun NowPlayingScreen(onClose: () -> Unit) {
                         tint = Color.White,
                         modifier = Modifier.size(40.dp),
                     )
+                }
+            }
+        }
+    }
+}
+
+/**
+ * 横屏车载布局（vivo 车联投屏时自动启用）。
+ * 左列：歌词铺满（首行齐标题、末行齐控件底）。
+ * 右列：标题（上）→ 封面（中，与标题/艺术家齐平）→ 艺术家 → 进度 → 控件（底）。
+ */
+@Composable
+private fun NowPlayingScreenLandscape(onClose: () -> Unit) {
+    val song = PlaybackStateHolder.currentSong ?: return
+    val playing = PlaybackStateHolder.isPlaying
+    val lyrics = PlaybackStateHolder.lyrics
+    val lineIndex = PlaybackStateHolder.lineIndex
+    val context = LocalContext.current
+    val view = LocalView.current
+
+    BackHandler { onClose() }
+
+    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF101014))) {
+        // 封面模糊背景
+        AsyncImage(
+            model = coverDisplayUrl(song.coverUrl, 300).takeUnless { it.isBlank() },
+            contentDescription = null,
+            modifier = Modifier.fillMaxSize().blur(72.dp),
+            contentScale = ContentScale.Crop,
+        )
+        Box(Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.55f)))
+
+        Row(
+            modifier = Modifier
+                .fillMaxSize()
+                .windowInsetsPadding(WindowInsets.statusBars)
+                .windowInsetsPadding(WindowInsets.navigationBars)
+                .padding(horizontal = 24.dp, vertical = 8.dp),
+        ) {
+            // ── 左列：歌词（铺满高度） ──
+            Box(modifier = Modifier.weight(1f).fillMaxSize()) {
+                IconButton(onClick = onClose, modifier = Modifier.align(Alignment.TopStart)) {
+                    Icon(
+                        imageVector = Icons.Outlined.KeyboardArrowDown,
+                        contentDescription = "收起",
+                        tint = Color.White,
+                    )
+                }
+                val lyricState = rememberLazyListState()
+                LaunchedEffect(lineIndex, lyrics) {
+                    if (lyrics.isNotEmpty() && lineIndex >= 0) {
+                        runCatching {
+                            lyricState.animateScrollToItem(index = lineIndex, scrollOffset = -200)
+                        }
+                    }
+                }
+                if (lyrics.isEmpty()) {
+                    Text(
+                        text = PlaybackStateHolder.currentLine.ifBlank { "暂无歌词" },
+                        color = Color.White.copy(alpha = 0.6f),
+                        fontSize = 16.sp,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                } else {
+                    LazyColumn(
+                        state = lyricState,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(top = 56.dp, bottom = 8.dp),
+                        horizontalAlignment = Alignment.Start,
+                    ) {
+                        items(lyrics.size) { i ->
+                            val isCurrent = i == lineIndex
+                            Text(
+                                text = lyrics[i].text,
+                                color = if (isCurrent) Color.White else Color.White.copy(alpha = 0.45f),
+                                fontSize = if (isCurrent) 18.sp else 16.sp,
+                                fontWeight = if (isCurrent) FontWeight.SemiBold else FontWeight.Normal,
+                                maxLines = 2,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(vertical = 6.dp),
+                            )
+                        }
+                    }
+                }
+            }
+
+            Spacer(Modifier.width(24.dp))
+
+            // ── 右列：标题 / 封面 / 艺术家 / 进度 / 控件 ──
+            Column(modifier = Modifier.weight(1f).fillMaxSize()) {
+                // 标题（居右，字体加大）
+                Text(
+                    text = song.name,
+                    color = Color.White,
+                    fontSize = 24.sp,
+                    fontWeight = FontWeight.Bold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Right,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                // 封面：中段铺满，与标题/艺术家齐平
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .padding(vertical = 12.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    AsyncImage(
+                        model = coverDisplayUrl(song.coverUrl, 500).takeUnless { it.isBlank() },
+                        contentDescription = null,
+                        modifier = Modifier
+                            .fillMaxHeight()
+                            .aspectRatio(1f)
+                            .clip(RoundedCornerShape(20.dp)),
+                        contentScale = ContentScale.Crop,
+                    )
+                }
+                // 艺术家（居右）
+                Text(
+                    text = song.artists,
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 17.sp,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    textAlign = TextAlign.Right,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                // 进度条
+                val duration = PlaybackStateHolder.durationMs
+                var dragFraction by remember { mutableFloatStateOf(Float.NaN) }
+                val posMs = PlaybackStateHolder.positionMs
+                val sliderValue = if (!dragFraction.isNaN()) dragFraction
+                    else if (duration > 0) (posMs.toFloat() / duration).coerceIn(0f, 1f) else 0f
+                Slider(
+                    value = sliderValue,
+                    onValueChange = { dragFraction = it },
+                    onValueChangeFinished = {
+                        if (!dragFraction.isNaN() && duration > 0) {
+                            view.haptic(HapticLevel.Light)
+                            PlayerController.seekTo(context, (dragFraction * duration).toLong())
+                        }
+                        dragFraction = Float.NaN
+                    },
+                    enabled = duration > 0,
+                    colors = SliderDefaults.colors(
+                        thumbColor = Color.White,
+                        activeTrackColor = Color.White,
+                        inactiveTrackColor = Color.White.copy(alpha = 0.3f),
+                    ),
+                    modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                )
+                // 控件
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 4.dp, bottom = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceEvenly,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    IconButton(onClick = { view.haptic(HapticLevel.Light); PlayerController.previous(context) }) {
+                        Icon(
+                            imageVector = Icons.Filled.SkipPrevious,
+                            contentDescription = "上一首",
+                            tint = Color.White,
+                            modifier = Modifier.size(40.dp),
+                        )
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(64.dp)
+                            .clip(RoundedCornerShape(50))
+                            .background(Color.White.copy(alpha = 0.2f))
+                            .clickable { view.haptic(HapticLevel.Light); PlayerController.toggle(context) },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = if (playing) Icons.Filled.Pause else Icons.Filled.PlayArrow,
+                            contentDescription = if (playing) "暂停" else "播放",
+                            tint = Color.White,
+                            modifier = Modifier.size(36.dp),
+                        )
+                    }
+                    IconButton(onClick = { view.haptic(HapticLevel.Light); PlayerController.next(context) }) {
+                        Icon(
+                            imageVector = Icons.Filled.SkipNext,
+                            contentDescription = "下一首",
+                            tint = Color.White,
+                            modifier = Modifier.size(40.dp),
+                        )
+                    }
                 }
             }
         }
