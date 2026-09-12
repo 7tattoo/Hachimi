@@ -99,20 +99,24 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           TAG="v$(grep -oP 'val appVersion = "\K[^"]+' app/build.gradle.kts)-run${{ github.run_number }}"
+          cat > /tmp/notes.md <<'NOTES_EOF'
+          10 个包名变体（vivo 智能车载投屏滚动歌词白名单包名），同一代码构建，7tattoo keystore v1/v2/v3 签名：
+          
+          - com.tencent.wecarflow — Tx爱趣听
+          - com.tencent.ibg.joox — Joox音乐
+          - com.spotify.music — Spotify（支持原子通知歌词）
+          - com.apple.android.music — Apple Music（支持原子通知歌词）
+          - com.luna.music.car — 汽水音乐
+          - com.kugou.android.auto — 酷狗音乐
+          - cn.kuwo.kwmusiccar — 酷我音乐
+          - com.qidian.QDReader — 起点读书
+          - com.tencent.weread — 微信读书
+          - cn.aqzscn.stream_music — 音流
+          
+          按需安装其中一个即可，包名不同可共存。
+          NOTES_EOF
+          sed -i 's/^  //g' /tmp/notes.md
           gh release create "$TAG" release-apks/*.apk \
             --title "Hachimi 10包名合一 Release $TAG" \
-            --notes "10 个包名变体（vivo 智能车载投屏滚动歌词白名单包名），同一代码构建，7tattoo keystore v1/v2/v3 签名：
-
-- com.tencent.wecarflow — Tx爱趣听
-- com.tencent.ibg.joox — Joox音乐
-- com.spotify.music — Spotify（支持原子通知歌词）
-- com.apple.android.music — Apple Music（支持原子通知歌词）
-- com.luna.music.car — 汽水音乐
-- com.kugou.android.auto — 酷狗音乐
-- cn.kuwo.kwmusiccar — 酷我音乐
-- com.qidian.QDReader — 起点读书
-- com.tencent.weread — 微信读书
-- cn.aqzscn.stream_music — 音流
-
-按需安装其中一个即可，包名不同可共存。" \
+            --notes-file /tmp/notes.md \
             --latest
