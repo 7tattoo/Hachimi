@@ -49,7 +49,6 @@ android {
 
     defaultConfig {
         applicationId = "com.apple.android.music"
-        resValue("string", "app_name", "Hachimi")
         minSdk = 33
         targetSdk = 33
         versionCode = gitCommitCount
@@ -87,52 +86,42 @@ android {
         create("wecarflow") {
             dimension = "store"
             applicationId = "com.tencent.wecarflow"
-            resValue("string", "app_name", "Tx爱趣听")
         }
         create("joox") {
             dimension = "store"
             applicationId = "com.tencent.ibg.joox"
-            resValue("string", "app_name", "Joox音乐")
         }
         create("spotify") {
             dimension = "store"
             applicationId = "com.spotify.music"
-            resValue("string", "app_name", "Spotify")
         }
         create("applemusic") {
             dimension = "store"
             applicationId = "com.apple.android.music"
-            resValue("string", "app_name", "Apple Music")
         }
         create("qishui") {
             dimension = "store"
             applicationId = "com.luna.music.car"
-            resValue("string", "app_name", "汽水音乐")
         }
         create("kugou") {
             dimension = "store"
             applicationId = "com.kugou.android.auto"
-            resValue("string", "app_name", "酷狗音乐")
         }
         create("kuwo") {
             dimension = "store"
             applicationId = "cn.kuwo.kwmusiccar"
-            resValue("string", "app_name", "酷我音乐")
         }
         create("qidian") {
             dimension = "store"
             applicationId = "com.qidian.QDReader"
-            resValue("string", "app_name", "起点读书")
         }
         create("weread") {
             dimension = "store"
             applicationId = "com.tencent.weread"
-            resValue("string", "app_name", "微信读书")
         }
         create("yinliu") {
             dimension = "store"
             applicationId = "cn.aqzscn.stream_music"
-            resValue("string", "app_name", "音流")
         }
     }
 
