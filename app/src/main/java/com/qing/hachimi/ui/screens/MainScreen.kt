@@ -549,6 +549,7 @@ fun MainScreen(
                     onPickMusicFolder = onPickMusicFolder,
                     onSwitchToDiscover = { currentTab = Tab.DISCOVER },
                     onMyBack = performContextBack,
+                    onDiscoverBack = performContextBack,
                     onBrowserLoginClick = openBrowserLogin,
                     onCookieLoginClick = { openCookieLoginDialog(1) },
                     onMusicULoginClick = { openCookieLoginDialog(0) },
@@ -1419,6 +1420,7 @@ private fun TabContent(
     onPickMusicFolder: () -> Unit,
     onSwitchToDiscover: () -> Unit,
     onMyBack: () -> Unit,
+    onDiscoverBack: () -> Unit,
     onBrowserLoginClick: () -> Unit,
     onCookieLoginClick: () -> Unit,
     onMusicULoginClick: () -> Unit,
@@ -1526,7 +1528,7 @@ private fun TabContent(
                     onRetry = discoverViewModel::retry,
                     innerPadding = innerPadding,
                     scrollToTopTrigger = scrollToTopTrigger,
-                    onBack = performContextBack,
+                    onBack = onDiscoverBack,
                 )
             }
             Tab.SEARCH -> {
