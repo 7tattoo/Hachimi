@@ -390,9 +390,9 @@ class PlaybackService : MediaBrowserServiceCompat() {
                         scheduleAtomicReplays(wholeLrc)
                         AppLogger.debug("lyric cache hit id=${song.id} lines=${cached.first.size}")
                     }
-                    // 自动切歌时 vivo 车机控制器不重新读 metadata → 歌词卡在第一行；
+                    // 恢复播放/自动切歌后车机控制器不重新读 metadata → 卡片无封面、歌词不对进度；
                     // 状态跳变 PAUSED→PLAYING 强制它重新拉取（含 LYRICS_WHOLE）。
-                    if (!manualSelect) nudgeCarController()
+                    nudgeCarController()
                     return@launch
                 }
                 val full = repo?.getLyricFull(song.id.toString())
@@ -412,7 +412,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
                     publishExtras(atomicEvent = true, line = lineTextAt(positionMs()), whole = wholeLrc)
                     scheduleAtomicReplays(wholeLrc)
                 }
-                if (!manualSelect) nudgeCarController()
+                nudgeCarController()
                 AppLogger.debug("lyric loaded id=${song.id} lines=${lines.size} cached=${lrcCache.containsKey(song.id)} lrcPreview=${wholeLrc.take(50)}")
             }
 
@@ -448,6 +448,8 @@ class PlaybackService : MediaBrowserServiceCompat() {
                     publishMetadata()
                     // 封面就绪后同步刷新通知，否则原子通知一直显示默认音乐符号
                     refreshNotificationWithCover()
+                    // 再 nudge 一次：封面晚于歌词到达，车机需重新拉取 metadata 才能显示封面
+                    nudgeCarController()
                 }
             }
 

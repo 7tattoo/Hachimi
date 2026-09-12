@@ -5,6 +5,9 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -39,12 +42,77 @@ jobs:
           restore-keys: |
             gradle-${{ runner.os }}-
 
-      - name: Build release APK
+      - name: Build release APKs (10 flavors)
         run: sh ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Sign release APKs (7tattoo keystore)
+        env:
+          KEYSTORE_B64: ${{ secrets.KEYSTORE_B64 }}
+          KS_PASS: ${{ secrets.KS_PASS }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASS: ${{ secrets.KEY_PASS }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > /tmp/keystore.jks
+          BT=$(ls -d $ANDROID_HOME/build-tools/*/ | sort -V | tail -1)
+          echo "build-tools: $BT"
+          mkdir -p release-apks
+          declare -A LABELS=(
+            [wecarflow]="Tx爱趣听"
+            [joox]="Joox音乐"
+            [spotify]="Spotify"
+            [applemusic]="AppleMusic"
+            [qishui]="汽水音乐"
+            [kugou]="酷狗音乐"
+            [kuwo]="酷我音乐"
+            [qidian]="起点读书"
+            [weread]="微信读书"
+            [yinliu]="音流"
+          )
+          VER=$(grep -oP 'val appVersion = "\K[^"]+' app/build.gradle.kts)
+          for apk in app/build/outputs/apk/*/release/*.apk; do
+            flavor=$(basename $(dirname $(dirname "$apk")))
+            label=${LABELS[$flavor]:-$flavor}
+            aligned=/tmp/${flavor}-aligned.apk
+            signed="release-apks/Hachimi_${VER}_${label}_${flavor}.apk"
+            "$BT/zipalign" -f -p 4 "$apk" "$aligned"
+            "$BT/apksigner" sign \
+              --ks /tmp/keystore.jks \
+              --ks-pass "pass:$KS_PASS" \
+              --ks-key-alias "$KEY_ALIAS" \
+              --key-pass "pass:$KEY_PASS" \
+              --out "$signed" "$aligned"
+            "$BT/apksigner" verify --print-certs "$signed" | head -3 || true
+            echo "signed: $signed"
+          done
+          rm -f /tmp/keystore.jks
+          ls -la release-apks/
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: hachimi-release-unsigned
-          path: app/build/outputs/apk/release/*.apk
+          name: hachimi-release-signed
+          path: release-apks/*.apk
           if-no-files-found: error
+
+      - name: Create GitHub Release (10合1)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v$(grep -oP 'val appVersion = "\K[^"]+' app/build.gradle.kts)-run${{ github.run_number }}"
+          gh release create "$TAG" release-apks/*.apk \
+            --title "Hachimi 10包名合一 Release $TAG" \
+            --notes "10 个包名变体（vivo 智能车载投屏滚动歌词白名单包名），同一代码构建，7tattoo keystore v1/v2/v3 签名：
+
+- com.tencent.wecarflow — Tx爱趣听
+- com.tencent.ibg.joox — Joox音乐
+- com.spotify.music — Spotify（支持原子通知歌词）
+- com.apple.android.music — Apple Music（支持原子通知歌词）
+- com.luna.music.car — 汽水音乐
+- com.kugou.android.auto — 酷狗音乐
+- cn.kuwo.kwmusiccar — 酷我音乐
+- com.qidian.QDReader — 起点读书
+- com.tencent.weread — 微信读书
+- cn.aqzscn.stream_music — 音流
+
+按需安装其中一个即可，包名不同可共存。" \
+            --latest

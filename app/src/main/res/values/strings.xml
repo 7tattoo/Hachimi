@@ -1,4 +1,4 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Hachimi</string>
+    <!-- app_name 由 flavor resValue 提供（10 包名合一） -->
 </resources>
