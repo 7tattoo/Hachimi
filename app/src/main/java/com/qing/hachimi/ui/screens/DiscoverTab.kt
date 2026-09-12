@@ -286,7 +286,6 @@ fun DiscoverTab(
                 )
             }
         }
-        }
     }
 }
 
