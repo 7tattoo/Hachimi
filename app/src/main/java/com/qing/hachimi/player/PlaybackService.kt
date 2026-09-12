@@ -27,6 +27,7 @@ import androidx.core.content.ContextCompat
 import androidx.media.MediaBrowserServiceCompat
 import androidx.media.app.NotificationCompat.MediaStyle
 import com.qing.hachimi.MainActivity
+import com.qing.hachimi.R
 import com.qing.hachimi.data.model.Song
 import com.qing.hachimi.data.repository.NeteaseRepository
 import com.qing.hachimi.util.AppLogger
@@ -911,6 +912,10 @@ class PlaybackService : MediaBrowserServiceCompat() {
                     .setState(PlaybackStateCompat.STATE_PLAYING, pos, 1f).build()
             )
             publishMetadata()
+            // 同步补推一次整段 LRC（lrc_change），防止车机偶发回退到单行模式
+            if (wholeLrc.isNotBlank()) {
+                publishExtras(atomicEvent = true, line = lineTextAt(pos), whole = wholeLrc)
+            }
             AppLogger.debug("nudgeCarController: PAUSED→PLAYING @${pos}ms")
         } catch (e: Exception) {
             AppLogger.warn("nudgeCarController failed: ${e.message}")
@@ -943,9 +948,13 @@ class PlaybackService : MediaBrowserServiceCompat() {
             .setOnlyAlertOnce(true)
             .setOngoing(playing)
             .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .addAction(0, "上一首", actionIntent(ACTION_PREV, 1))
-            .addAction(0, if (playing) "暂停" else "播放", actionIntent(ACTION_TOGGLE, 2))
-            .addAction(0, "下一首", actionIntent(ACTION_NEXT, 3))
+            .addAction(R.drawable.ic_notif_prev, "上一首", actionIntent(ACTION_PREV, 1))
+            .addAction(
+                if (playing) R.drawable.ic_notif_pause else R.drawable.ic_notif_play,
+                if (playing) "暂停" else "播放",
+                actionIntent(ACTION_TOGGLE, 2)
+            )
+            .addAction(R.drawable.ic_notif_next, "下一首", actionIntent(ACTION_NEXT, 3))
             .setStyle(
                 MediaStyle()
                     .setMediaSession(session?.sessionToken)
