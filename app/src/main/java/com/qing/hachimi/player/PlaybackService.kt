@@ -609,7 +609,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
 
     private fun resume() {
         val p = player ?: run {
-            if (queue.isNotEmpty()) loadSong(index, true)
+            if (queue.isNotEmpty()) loadSong(index, true, manualSelect = true)
             return
         }
         try {
@@ -1053,7 +1053,7 @@ class PlaybackService : MediaBrowserServiceCompat() {
             // 如果之前是播放状态，重新加载歌曲并跳到上次进度
             if (wasPlaying) {
                 pendingSeekMs = savedPos
-                loadSong(index, true)
+                loadSong(index, true, manualSelect = true)
             } else {
                 // 暂停状态：只更新 UI，不自动播放
                 publishMetadata()
