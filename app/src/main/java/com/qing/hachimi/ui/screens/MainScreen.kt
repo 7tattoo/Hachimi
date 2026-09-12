@@ -1526,6 +1526,7 @@ private fun TabContent(
                     onRetry = discoverViewModel::retry,
                     innerPadding = innerPadding,
                     scrollToTopTrigger = scrollToTopTrigger,
+                    onBack = performContextBack,
                 )
             }
             Tab.SEARCH -> {

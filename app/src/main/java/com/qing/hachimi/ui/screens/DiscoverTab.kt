@@ -1,6 +1,7 @@
 package com.qing.hachimi.ui.screens
 
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -84,6 +85,7 @@ import top.yukonga.miuix.kmp.basic.VerticalScrollBar
 import top.yukonga.miuix.kmp.basic.rememberScrollBarAdapter
 import top.yukonga.miuix.kmp.icon.MiuixIcons
 import top.yukonga.miuix.kmp.icon.extended.Album
+import top.yukonga.miuix.kmp.icon.extended.Back
 import top.yukonga.miuix.kmp.icon.extended.Contacts
 import top.yukonga.miuix.kmp.icon.extended.FavoritesFill
 import top.yukonga.miuix.kmp.icon.extended.Mic
@@ -151,6 +153,7 @@ fun DiscoverTab(
     sortOption: SongSortOption = SongSortOption.DEFAULT,
     sortAscending: Boolean = true,
     scrollToTopTrigger: Int = 0,
+    onBack: (() -> Unit)? = null,
 ) {
     val horizontalDirection = if (LocalLayoutDirection.current == LayoutDirection.Ltr) 1 else -1
     val level = when {
@@ -174,6 +177,7 @@ fun DiscoverTab(
         },
         label = "DiscoverLevel",
     ) { target ->
+        Box(modifier = Modifier.fillMaxSize()) {
         when (target) {
             DiscoverLevel.HOME -> DiscoverHome(
                 state = uiState,
@@ -258,6 +262,30 @@ fun DiscoverTab(
                     }
                 }
             }
+        }
+        // 二级/三级页面左上角常显返回按钮（车机投屏时便于点按返回）
+        val backAction = onBack
+        if (target != DiscoverLevel.HOME && backAction != null) {
+            Box(
+                modifier = Modifier
+                    .align(Alignment.TopStart)
+                    .padding(
+                        start = 10.dp,
+                        top = innerPadding.calculateTopPadding() + 8.dp,
+                    )
+                    .size(40.dp)
+                    .clip(RoundedCornerShape(50))
+                    .background(colorScheme.surface.copy(alpha = 0.72f))
+                    .clickable { backAction() },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = MiuixIcons.Regular.Back,
+                    contentDescription = "返回",
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+        }
         }
     }
 }
