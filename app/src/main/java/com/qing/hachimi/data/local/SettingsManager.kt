@@ -34,6 +34,11 @@ class SettingsManager(context: Context) {
         get() = prefs.getString("quality", "exhigh") ?: "exhigh"
         set(value) = prefs.edit().putString("quality", value).apply()
 
+    /** 在线播放音质（与下载音质独立；播放时自动降级由 getSongUrl 内部 fallback 完成） */
+    var playbackQuality: String
+        get() = prefs.getString("playback_quality", "lossless") ?: "lossless"
+        set(value) = prefs.edit().putString("playback_quality", value).apply()
+
     var downloadDir: String
         get() = prefs.getString("download_dir", "") ?: ""
         set(value) = prefs.edit().putString("download_dir", value).apply()

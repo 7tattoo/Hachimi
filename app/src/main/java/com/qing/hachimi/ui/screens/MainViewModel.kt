@@ -45,6 +45,7 @@ data class MainUiState(
     val customNamingTemplate: String = "",
     val artistDelimiter: String = "/",
     val qualityPickerOptions: List<String> = emptyList(),
+    val playbackQuality: String = "lossless",
     val colorMode: Int = 5,
     val blurEffect: Boolean = true,
     val liquidGlass: Boolean = false,
@@ -131,6 +132,7 @@ class MainViewModel(
             customNamingTemplate = settingsManager.customNamingTemplate,
             artistDelimiter = settingsManager.artistDelimiter,
             qualityPickerOptions = settingsManager.getFilteredQualityKeys(),
+            playbackQuality = settingsManager.playbackQuality,
             colorMode = settingsManager.themeColorMode,
             blurEffect = settingsManager.blurEffect,
             liquidGlass = settingsManager.liquidGlass,
@@ -208,6 +210,11 @@ class MainViewModel(
     fun updateQuality(quality: String) {
         settingsManager.quality = quality
         _uiState.value = _uiState.value.copy(quality = quality)
+    }
+
+    fun updatePlaybackQuality(quality: String) {
+        settingsManager.playbackQuality = quality
+        _uiState.value = _uiState.value.copy(playbackQuality = quality)
     }
 
     fun updateDownloadDir(path: String) {

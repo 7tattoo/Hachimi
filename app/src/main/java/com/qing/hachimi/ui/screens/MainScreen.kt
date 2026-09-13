@@ -1704,6 +1704,7 @@ private fun TabContent(
                                      onOpenStoragePermissionSettings = onOpenStoragePermissionSettings,
                                     onToggleFuckAiMode = viewModel::toggleFuckAiMode,
                                     onQualitySelect = viewModel::updateQuality,
+                                    onPlaybackQualitySelect = viewModel::updatePlaybackQuality,
                                     onSetNamingFormat = viewModel::setNamingFormat,
                                     onToggleDownloadLyrics = viewModel::toggleDownloadLyrics,
                                     onSetFolderNamingFormat = viewModel::setFolderNamingFormat,

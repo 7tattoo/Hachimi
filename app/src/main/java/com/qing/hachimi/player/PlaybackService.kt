@@ -29,6 +29,7 @@ import androidx.media.app.NotificationCompat.MediaStyle
 import com.qing.hachimi.MainActivity
 import com.qing.hachimi.R
 import com.qing.hachimi.data.model.Song
+import com.qing.hachimi.data.local.SettingsManager
 import com.qing.hachimi.data.repository.NeteaseRepository
 import com.qing.hachimi.util.AppLogger
 import kotlinx.coroutines.CoroutineScope
@@ -416,16 +417,19 @@ class PlaybackService : MediaBrowserServiceCompat() {
                 AppLogger.debug("lyric loaded id=${song.id} lines=${lines.size} cached=${lrcCache.containsKey(song.id)} lrcPreview=${wholeLrc.take(50)}")
             }
 
-            // 1. 取播放地址。getSongUrl 内部已做 lossless→exhigh→higher→standard 全音质降级，
-            //    不再额外重复请求 standard（旧实现每次失败要打 6 个 eapiPost，连点触发反爬限流返回空 URL）。
-            var url = repo?.getSongUrl(song.id.toString(), "lossless")?.getOrNull()
+            // 1. 取播放地址。音质来自设置（在线播放音质），getSongUrl 内部已做
+            //    选中音质→更低的逐级降级，请求不到自动换下一档音质；
+            //    不再额外重复请求（旧实现每次失败要打 6 个 eapiPost，连点触发反爬限流返回空 URL）。
+            val playQuality = runCatching { GlobalContext.get().get<SettingsManager>() }
+                .getOrNull()?.playbackQuality ?: "lossless"
+            var url = repo?.getSongUrl(song.id.toString(), playQuality)?.getOrNull()
             // 连点/瞬时反爬限流可能让 URL 返回空：等一小段时间重试一次再判定
             if (url.isNullOrBlank() && !standardRetried) {
                 standardRetried = true
                 AppLogger.warn("no url for ${song.id}, retrying after short delay (anti-abuse?)")
                 delay(600)
                 if (currentSong()?.id != song.id) return@launch
-                url = repo?.getSongUrl(song.id.toString(), "lossless")?.getOrNull()
+                url = repo?.getSongUrl(song.id.toString(), playQuality)?.getOrNull()
             }
             if (url.isNullOrBlank() || currentSong()?.id != song.id) {
                 AppLogger.warn("no playable url for ${song.id}")

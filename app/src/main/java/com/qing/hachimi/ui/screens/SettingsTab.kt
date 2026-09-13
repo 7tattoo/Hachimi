@@ -381,6 +381,7 @@ fun DownloadSettingsScreen(
     onOpenStoragePermissionSettings: () -> Unit = {},
     onToggleFuckAiMode: () -> Unit,
     onQualitySelect: (String) -> Unit,
+    onPlaybackQualitySelect: (String) -> Unit = {},
     onSetNamingFormat: (NamingFormat) -> Unit,
     onToggleDownloadLyrics: () -> Unit,
     onSetFolderNamingFormat: (FolderNamingFormat) -> Unit,
@@ -426,6 +427,27 @@ fun DownloadSettingsScreen(
                     },
                     onSelectedIndexChange = { index ->
                         onQualitySelect(uiState.qualityPickerOptions[index])
+                    }
+                )
+
+                val playbackQualityOptions = uiState.qualityPickerOptions.map { key ->
+                    NeteaseApi.QUALITY_MAP[key] ?: key
+                }
+                OverlayDropdownPreference(
+                    title = "在线播放音质",
+                    summary = "选择在线播放音质（不可用时自动降级）",
+                    items = playbackQualityOptions,
+                    selectedIndex = uiState.qualityPickerOptions.indexOf(uiState.playbackQuality).coerceAtLeast(0),
+                    startAction = {
+                        Icon(
+                            MiuixIcons.Music,
+                            modifier = Modifier.padding(end = 6.dp),
+                            contentDescription = "在线播放音质",
+                            tint = colorScheme.onBackground
+                        )
+                    },
+                    onSelectedIndexChange = { index ->
+                        onPlaybackQualitySelect(uiState.qualityPickerOptions[index])
                     }
                 )
 
