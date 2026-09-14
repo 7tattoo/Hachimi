@@ -46,6 +46,7 @@ data class MainUiState(
     val artistDelimiter: String = "/",
     val qualityPickerOptions: List<String> = emptyList(),
     val playbackQuality: String = "lossless",
+    val allowConcurrentPlayback: Boolean = false,
     val colorMode: Int = 5,
     val blurEffect: Boolean = true,
     val liquidGlass: Boolean = false,
@@ -133,6 +134,7 @@ class MainViewModel(
             artistDelimiter = settingsManager.artistDelimiter,
             qualityPickerOptions = settingsManager.getFilteredQualityKeys(),
             playbackQuality = settingsManager.playbackQuality,
+            allowConcurrentPlayback = settingsManager.allowConcurrentPlayback,
             colorMode = settingsManager.themeColorMode,
             blurEffect = settingsManager.blurEffect,
             liquidGlass = settingsManager.liquidGlass,
@@ -215,6 +217,12 @@ class MainViewModel(
     fun updatePlaybackQuality(quality: String) {
         settingsManager.playbackQuality = quality
         _uiState.value = _uiState.value.copy(playbackQuality = quality)
+    }
+
+    fun toggleAllowConcurrentPlayback() {
+        val newValue = !_uiState.value.allowConcurrentPlayback
+        settingsManager.allowConcurrentPlayback = newValue
+        _uiState.value = _uiState.value.copy(allowConcurrentPlayback = newValue)
     }
 
     fun updateDownloadDir(path: String) {

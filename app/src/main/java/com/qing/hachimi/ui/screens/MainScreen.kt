@@ -1741,6 +1741,8 @@ private fun TabContent(
                                     .background(colorScheme.surface)
                             ) {
                                 PreviewFeaturesScreen(
+                                    uiState = uiState,
+                                    onToggleAllowConcurrentPlayback = viewModel::toggleAllowConcurrentPlayback,
                                     onOpenQualityUpgrade = onOpenQualityUpgrade,
                                     onBack = onClosePreviewFeatures,
                                     innerPadding = innerPadding,
@@ -1816,6 +1818,7 @@ private fun ContextBackPreview(
         }
         ContextBackTarget.QUALITY_UPGRADE -> {
             PreviewFeaturesScreen(
+                uiState = uiState,
                 onOpenQualityUpgrade = {},
                 onBack = {},
                 innerPadding = innerPadding,

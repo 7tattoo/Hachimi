@@ -1028,6 +1028,8 @@ private fun InfoRow(label: String, value: String) {
 @OptIn(ExperimentalScrollBarApi::class)
 @Composable
 fun PreviewFeaturesScreen(
+    uiState: MainUiState,
+    onToggleAllowConcurrentPlayback: () -> Unit = {},
     onOpenQualityUpgrade: () -> Unit,
     onBack: () -> Unit,
     innerPadding: PaddingValues = PaddingValues(0.dp),
@@ -1071,6 +1073,21 @@ fun PreviewFeaturesScreen(
                             )
                         },
                         onClick = onOpenQualityUpgrade,
+                    )
+
+                    SwitchPreference(
+                        title = "与其他应用同时播放",
+                        summary = "不请求音频焦点，与其他应用的声音并行播放，焦点变化不暂停",
+                        startAction = {
+                            Icon(
+                                MiuixIcons.Music,
+                                modifier = Modifier.padding(end = 6.dp),
+                                contentDescription = "与其他应用同时播放",
+                                tint = colorScheme.onBackground
+                            )
+                        },
+                        checked = uiState.allowConcurrentPlayback,
+                        onCheckedChange = { onToggleAllowConcurrentPlayback() }
                     )
                 }
             }

@@ -39,6 +39,11 @@ class SettingsManager(context: Context) {
         get() = prefs.getString("playback_quality", "lossless") ?: "lossless"
         set(value) = prefs.edit().putString("playback_quality", value).apply()
 
+    /** 允许与其他应用同时播放（不请求音频焦点，焦点丢失不暂停） */
+    var allowConcurrentPlayback: Boolean
+        get() = prefs.getBoolean("allow_concurrent_playback", false)
+        set(value) = prefs.edit().putBoolean("allow_concurrent_playback", value).apply()
+
     var downloadDir: String
         get() = prefs.getString("download_dir", "") ?: ""
         set(value) = prefs.edit().putString("download_dir", value).apply()

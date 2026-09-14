@@ -181,6 +181,11 @@ class PlaybackService : MediaBrowserServiceCompat() {
                     .build()
             )
             .setOnAudioFocusChangeListener { f ->
+                // "与其他应用同时播放"开启时：焦点变化不暂停（实时读设置，开关变化立即生效）
+                val concurrent = runCatching {
+                    GlobalContext.get().get<SettingsManager>()
+                }.getOrNull()?.allowConcurrentPlayback ?: false
+                if (concurrent) return@setOnAudioFocusChangeListener
                 when (f) {
                     AudioManager.AUDIOFOCUS_LOSS,
                     AudioManager.AUDIOFOCUS_LOSS_TRANSIENT -> pause()
@@ -658,6 +663,11 @@ class PlaybackService : MediaBrowserServiceCompat() {
     }
 
     private fun requestFocus() {
+        // "与其他应用同时播放"开启时：不请求音频焦点（不抢占别的应用，也不会被系统压掉）
+        val concurrent = runCatching {
+            GlobalContext.get().get<SettingsManager>()
+        }.getOrNull()?.allowConcurrentPlayback ?: false
+        if (concurrent) return
         try {
             focusRequest?.let { audioManager?.requestAudioFocus(it) }
         } catch (_: Exception) {
