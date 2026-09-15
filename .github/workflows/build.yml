@@ -27,6 +27,9 @@ jobs:
       - name: Set up Android SDK
         uses: android-actions/setup-android@v3
         with:
+          # 只装 platform-tools：默认列表含已被 Google 移除的 legacy 'tools' 包（sdkmanager 16 起报错）。
+          # compileSdk/platforms/build-tools 由 AGP 依 license 自动下载。
+          packages: 'platform-tools'
           accept-android-sdk-licenses: true
 
       - name: Accept licenses
