@@ -7,6 +7,11 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyListState
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -104,7 +109,6 @@ fun SettingsTab(
     onShareLog: () -> Unit = {},
     onExportCookies: () -> Unit = {},
     onImportClick: () -> Unit = {},
-    onClearSeenClick: () -> Unit = {},
     onClearCache: () -> Unit = {},
     innerPadding: PaddingValues = PaddingValues(0.dp),
     scrollToTopTrigger: Int = 0,
@@ -321,20 +325,6 @@ fun SettingsTab(
                         )
                     },
                     onClick = onShareLog
-                )
-
-                ArrowPreference(
-                    title = "重置发现页",
-                    summary = "清除发现页缓存并重新加载",
-                    startAction = {
-                        Icon(
-                            MiuixIcons.Reset,
-                            modifier = Modifier.padding(end = 6.dp),
-                            contentDescription = "重置发现页",
-                            tint = colorScheme.onBackground
-                        )
-                    },
-                    onClick = onClearSeenClick
                 )
 
                 ArrowPreference(
@@ -753,6 +743,7 @@ fun DownloadSettingsScreen(
         adapter = rememberScrollBarAdapter(listState),
         modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
     )
+    PersistentBackButton(listState = listState, onBack = onBack, topPadding = innerPadding.calculateTopPadding())
     }
 }
 
@@ -896,6 +887,7 @@ fun AccountSettingsScreen(
         adapter = rememberScrollBarAdapter(listState),
         modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
     )
+    PersistentBackButton(listState = listState, onBack = onBack, topPadding = innerPadding.calculateTopPadding())
     }
 }
 
@@ -1002,6 +994,7 @@ fun AppearanceSettingsScreen(
         adapter = rememberScrollBarAdapter(listState),
         modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
     )
+    PersistentBackButton(listState = listState, onBack = onBack, topPadding = innerPadding.calculateTopPadding())
     }
 }
 
@@ -1099,6 +1092,36 @@ fun PreviewFeaturesScreen(
             adapter = rememberScrollBarAdapter(listState),
             modifier = Modifier.align(Alignment.CenterEnd).fillMaxHeight(),
         )
+        PersistentBackButton(listState = listState, onBack = onBack, topPadding = innerPadding.calculateTopPadding())
     }
 }
 
+
+// ═════════════════════════════════════════════════════════════════════════════
+// 二级页滚动后左上角常显返回按钮（车机投屏无系统返回时便于点按）
+// ═════════════════════════════════════════════════════════════════════════════
+
+@Composable
+internal fun androidx.compose.foundation.layout.BoxScope.PersistentBackButton(
+    listState: LazyListState,
+    onBack: () -> Unit,
+    topPadding: Dp,
+) {
+    if (!listState.canScrollBackward) return
+    Box(
+        modifier = Modifier
+            .align(Alignment.TopStart)
+            .padding(start = 10.dp, top = topPadding + 8.dp)
+            .size(40.dp)
+            .clip(RoundedCornerShape(50))
+            .background(colorScheme.surface.copy(alpha = 0.72f))
+            .clickable { onBack() },
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            imageVector = MiuixIcons.Regular.Back,
+            contentDescription = "返回",
+            modifier = Modifier.size(20.dp),
+        )
+    }
+}

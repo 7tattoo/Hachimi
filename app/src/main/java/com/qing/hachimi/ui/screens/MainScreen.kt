@@ -268,6 +268,22 @@ fun MainScreen(
         }
     }
     val lifecycleOwner = LocalLifecycleOwner.current
+    // 热启动（后台→前台）自动刷新发现页；跳过首次 ON_RESUME（冷启动本来就会加载）
+    DisposableEffect(lifecycleOwner, discoverViewModel) {
+        var firstResume = true
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                if (firstResume) {
+                    firstResume = false
+                } else {
+                    AppLogger.debug("app resumed: refreshing discover page")
+                    discoverViewModel.refreshCurrentSource()
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME && pendingStoragePermissionCheck) {
@@ -512,7 +528,10 @@ fun MainScreen(
                                 DiscoverCategoryActions(
                                     sourceMode = discoverState.sourceMode,
                                     columns = discoverState.gridColumns,
-                                    onRefresh = discoverViewModel::refreshCurrentSource,
+                                    onRefresh = {
+                                        viewModel.clearSeenItems()
+                                        discoverViewModel.refreshCurrentSource()
+                                    },
                                     onSetColumns = discoverViewModel::setGridColumns,
                                 )
                             }
@@ -1524,7 +1543,10 @@ private fun TabContent(
                     onLoadMore = discoverViewModel::loadMoreCurrentSource,
                     onLoadMoreDetail = discoverViewModel::loadMorePodcastPrograms,
                     onLoadMoreArtistSection = discoverViewModel::loadMoreArtistSection,
-                    onRefresh = { discoverViewModel.refreshCurrentSource() },
+                    onRefresh = {
+                        viewModel.clearSeenItems()
+                        discoverViewModel.refreshCurrentSource()
+                    },
                     onRetry = discoverViewModel::retry,
                     innerPadding = innerPadding,
                     scrollToTopTrigger = scrollToTopTrigger,
@@ -1668,10 +1690,6 @@ private fun TabContent(
                                 },
                                 onExportCookies = onExportCookies,
                                 onImportClick = onImportClick,
-                                onClearSeenClick = {
-                                    viewModel.clearSeenItems()
-                                    discoverViewModel.refreshCurrentSource()
-                                },
                                 onClearCache = {
                                     viewModel.clearCache(context)
                                 },
